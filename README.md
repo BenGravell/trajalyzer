@@ -98,15 +98,14 @@ The landing view now reads `web/public/corpus/manifest.json`, requests at most
 six position shards and displays at most 768 windows. The corpus page control
 covers every shard in successive views. It downloads a selected shard's
 actions on demand. Filters count all matching windows in the manifest while
-the display remains bounded; the path slider refers to **loaded** paths. The Rerun diagnostic view remains
-available on demand and is loaded as a separate JavaScript module.
+the display remains bounded; the path slider refers to **loaded** paths. The
+Rerun diagnostic view remains available on demand and is loaded as a separate JavaScript module.
 
-The checked-in corpus is a 500-window protocol demonstration built from the
-previous sample:
-
-```bash
-python scripts/build_corpus.py
-```
+The Pages build generates its corpus with the Rust builder from the verified
+small INTERACTION archive and the committed 64-exemplar feature model. The
+Rerun diagnostic recording remains the existing 500-window sample. For a quick
+protocol fixture without Cargo or network access, run
+`python scripts/build_corpus.py` against the checked-in diagnostic binaries.
 
 For a larger INTERACTION CSV collection, fit exemplars on training tracks with
 the existing scikit-learn pipeline, export the model, and run the native builder:
@@ -118,8 +117,8 @@ python scripts/build_native_corpus.py --input /path/to/interaction/csv --model d
 
 Omit `--input` to fetch and verify the small official TC archive automatically.
 The Rust builder groups one source file at a time through temporary disk
-partitions sized from its source bytes, segments tracks on time gaps and impossible jumps, resamples 50
-positions at 10 Hz, excludes windows below 1 m/s, infers acceleration and
+partitions sized from its source bytes, segments tracks on time gaps and
+impossible jumps, resamples 50 positions at 10 Hz, excludes windows below 1 m/s, infers acceleration and
 curvature with the same seven-point cubic local fit, assigns the nearest
 observed exemplar, and writes independent, cacheable shards. It also writes
 `index.csv` with source track and start time for provenance. The static shard
