@@ -35,9 +35,10 @@ def _colors(trajectories: np.ndarray) -> np.ndarray:
     return colors
 
 
-def _log_recording(rr, rrb, batch: np.ndarray, sample_rate: int, live: bool) -> None:
+def _log_recording(rr, rrb, batch: np.ndarray, sample_rate: int, live: bool,
+                   cluster_ids=None, palette=None) -> None:
     count, frames, _ = batch.shape
-    colors = _colors(batch)
+    colors = _colors(batch) if cluster_ids is None else np.asarray(palette, dtype=np.uint8)[cluster_ids]
     rr.send_blueprint(rrb.Blueprint(
         rrb.Spatial2DView(origin="/trajectories", name="Ego trajectories (metres)"),
     ))
@@ -46,6 +47,8 @@ def _log_recording(rr, rrb, batch: np.ndarray, sample_rate: int, live: bool) -> 
         "trajectories/paths",
         rr.LineStrips2D(
             strips=list(batch), colors=colors, radii=rr.Radius.ui_points(1.2),
+            labels=None if cluster_ids is None else [f"Exemplar {i + 1}" for i in cluster_ids],
+            show_labels=False,
         ),
         static=True,
     )

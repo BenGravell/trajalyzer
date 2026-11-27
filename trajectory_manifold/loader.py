@@ -217,6 +217,36 @@ def load_trajectories(
     return trajectories, metadata
 
 
+def iter_trajectory_batches(*, dataset="interaction", source_url=INTERACTION_TC_URL,
+                            batch_size=2048, duration=5.0, sample_rate=10,
+                            stride=1.0, coordinate_frame="ego",
+                            max_gap=0.3, max_speed=70.0):
+    """Yield (positions, metadata) batches without collecting all windows.
+
+    This reopens the small source archive on each iteration, so a repeatable
+    factory can make multiple passes for MiniBatchKMeans on large collections.
+    The ZIP stays in memory; only a batch of processed windows is retained.
+    """
+    if dataset.lower() != "interaction" or batch_size < 1:
+        raise ValueError("Require dataset='interaction' and positive batch_size")
+    if coordinate_frame not in ("ego", "world") or abs(duration * sample_rate - round(duration * sample_rate)) > 1e-9:
+        raise ValueError("Invalid coordinate frame or temporal grid")
+    positions, metadata = [], []
+    for path, track_id, rows in _source_tracks(source_url):
+        for trajectory, info in _windows(
+            path, track_id, rows, duration=duration, sample_rate=sample_rate,
+            stride=stride, coordinate_frame=coordinate_frame,
+            max_gap=max_gap, max_speed=max_speed,
+        ):
+            positions.append(trajectory)
+            metadata.append(info)
+            if len(positions) == batch_size:
+                yield np.stack(positions), metadata
+                positions, metadata = [], []
+    if positions:
+        yield np.stack(positions), metadata
+
+
 if __name__ == "__main__":
     batch, details = load_trajectories()
     print(f"Loaded {batch.shape[0]} trajectories of shape {batch.shape[1:]} from "

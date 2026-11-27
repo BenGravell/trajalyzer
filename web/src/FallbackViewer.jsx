@@ -1,6 +1,6 @@
 import {useEffect, useRef, useState} from 'react';
 
-export default function FallbackViewer({paths, time, onSelect}) {
+export default function FallbackViewer({paths, time, selectedIndex, labels, palette, exemplarPath, onSelect}) {
   const canvas = useRef(null);
   const [size, setSize] = useState([1, 1]);
   const [view, setView] = useState({scale: 1, dx: 0, dy: 0});
@@ -47,10 +47,12 @@ export default function FallbackViewer({paths, time, onSelect}) {
     ctx.strokeStyle = '#34465a'; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(0, origin[1]); ctx.lineTo(width, origin[1]);
     ctx.moveTo(origin[0], 0); ctx.lineTo(origin[0], height); ctx.stroke();
-    for (const path of paths) {
+    for (const [index, path] of paths.entries()) {
       const lateral = path[path.length - 1][1];
-      const color = lateral > 3 ? '#ffad66' : lateral < -3 ? '#83b9ff' : '#7de2c0';
-      ctx.strokeStyle = color; ctx.globalAlpha = .27; ctx.lineWidth = 1.3;
+      const color = labels && palette ? palette[labels[index]] :
+        (lateral > 3 ? '#ffad66' : lateral < -3 ? '#83b9ff' : '#7de2c0');
+      ctx.strokeStyle = color; ctx.globalAlpha = index === selectedIndex ? 1 : .22;
+      ctx.lineWidth = index === selectedIndex ? 3 : 1.3;
       ctx.beginPath();
       for (let i = 0; i <= time && i < path.length; i++) {
         const [x, y] = project(path[i], width, height);
@@ -58,10 +60,20 @@ export default function FallbackViewer({paths, time, onSelect}) {
       }
       ctx.stroke(); ctx.globalAlpha = .85;
       const [x, y] = project(path[Math.min(time, path.length - 1)], width, height);
-      ctx.fillStyle = color; ctx.beginPath(); ctx.arc(x, y, 2.5, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = color; ctx.beginPath(); ctx.arc(x, y, index === selectedIndex ? 5 : 2.5, 0, Math.PI * 2); ctx.fill();
+    }
+    if (exemplarPath) {
+      ctx.setLineDash([5, 5]); ctx.strokeStyle = '#ffffff'; ctx.globalAlpha = .85;
+      ctx.lineWidth = 2; ctx.beginPath();
+      exemplarPath.forEach((point, i) => {
+        if(i > time) return;
+        const [x,y] = project(point, width, height);
+        if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+      });
+      ctx.stroke(); ctx.setLineDash([]);
     }
     ctx.globalAlpha = 1;
-  }, [paths, time, size, view]);
+  }, [paths, time, selectedIndex, labels, palette, exemplarPath, size, view]);
 
   const select = event => {
     if (drag.current?.moved || !paths?.length) return;
@@ -75,7 +87,7 @@ export default function FallbackViewer({paths, time, onSelect}) {
     });
     if (best < 24 && index >= 0) {
       const [px, py] = paths[index][time];
-      onSelect(`Path ${index + 1} · ${px.toFixed(1)} m forward, ${py.toFixed(1)} m lateral`);
+      onSelect(index, `${px.toFixed(1)} m forward, ${py.toFixed(1)} m lateral`);
     }
   };
 
@@ -87,6 +99,6 @@ export default function FallbackViewer({paths, time, onSelect}) {
         setView(v => ({...v, dx: v.dx + dx, dy: v.dy + dy})); drag.current.x = e.clientX; drag.current.y = e.clientY;}}
       onPointerUp={e => {select(e); drag.current = null;}}
       onWheel={e => {e.preventDefault(); setView(v => ({...v, scale: Math.max(.25, Math.min(8, v.scale * (e.deltaY < 0 ? 1.12 : .89)))}));}}/>
-    <span className="canvas-note">2D view · drag to pan · scroll to zoom · tap a point to inspect</span>
+    <span className="canvas-note">Color = nearest exemplar · white dashed = exemplar · drag to pan · tap to inspect</span>
   </div>;
 }
