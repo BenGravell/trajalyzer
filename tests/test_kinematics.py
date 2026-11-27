@@ -8,7 +8,7 @@ from trajectory_manifold.kinematics import infer_kinematics
 class KinematicsTests(unittest.TestCase):
     def test_constant_acceleration(self):
         t = np.arange(50) / 10
-        positions = np.column_stack((4 * t + .5 * 1.2 * t**2, np.zeros_like(t)))
+        positions = np.column_stack((4 * t + 0.5 * 1.2 * t**2, np.zeros_like(t)))
         states, actions, valid = infer_kinematics(positions)
         self.assertTrue(valid.all())
         np.testing.assert_allclose(states[:, 3], 4 + 1.2 * t, atol=1e-10)
@@ -17,13 +17,14 @@ class KinematicsTests(unittest.TestCase):
 
     def test_constant_curvature(self):
         t = np.arange(50) / 10
-        radius, angular_rate = 10., .4
-        positions = np.column_stack((radius * np.sin(angular_rate * t),
-                                     radius * (1 - np.cos(angular_rate * t))))
+        radius, angular_rate = 10.0, 0.4
+        positions = np.column_stack(
+            (radius * np.sin(angular_rate * t), radius * (1 - np.cos(angular_rate * t)))
+        )
         _, actions, valid = infer_kinematics(positions)
         self.assertTrue(valid.all())
-        np.testing.assert_allclose(actions[3:-3, 1], 1 / radius, atol=.001)
-        np.testing.assert_allclose(actions[3:-3, 0], 0, atol=.01)
+        np.testing.assert_allclose(actions[3:-3, 1], 1 / radius, atol=0.001)
+        np.testing.assert_allclose(actions[3:-3, 0], 0, atol=0.01)
 
     def test_stationary_is_unidentifiable(self):
         states, actions, valid = infer_kinematics(np.zeros((50, 2)))

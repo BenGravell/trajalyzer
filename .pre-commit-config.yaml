@@ -1,0 +1,26 @@
+repos:
+  - repo: local
+    hooks:
+      - id: ruff
+        name: Ruff lint
+        entry: ruff check --fix
+        language: system
+        types: [python]
+      - id: black
+        name: Black format
+        entry: black
+        language: system
+        types: [python]
+      - id: web-check
+        name: ESLint and Prettier
+        entry: npm --prefix web run check
+        language: system
+        pass_filenames: false
+        files: ^web/(src/|index\.html|vite\.config\.js|package(-lock)?\.json|eslint\.config\.js|\.prettierrc)
+      - id: pre-push
+        name: Full local checks
+        entry: ./scripts/check.sh
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

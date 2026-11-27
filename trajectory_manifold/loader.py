@@ -19,16 +19,13 @@ from pathlib import Path
 
 import numpy as np
 
-
 INTERACTION_TC_URL = (
     "https://huggingface.co/datasets/INTERACTION-dataset/"
     "INTERACTION-dataset/resolve/main/INTERACTION-Dataset-TC-v1_0.zip"
 )
 # Official archive hash, checked so a changing upstream file cannot silently
 # invalidate a previously cached experiment.
-INTERACTION_TC_SHA256 = (
-    "9aa78102006dc8d8a64675cf64eba5264085cfb1c006b1f4d0e856d94e657aec"
-)
+INTERACTION_TC_SHA256 = "9aa78102006dc8d8a64675cf64eba5264085cfb1c006b1f4d0e856d94e657aec"
 _CACHE_VERSION = 1
 
 
@@ -44,7 +41,8 @@ def _source_tracks(url: str):
 
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         paths = sorted(
-            name for name in archive.namelist()
+            name
+            for name in archive.namelist()
             if Path(name).name.startswith("vehicle_tracks_")
             and name.endswith(".csv")
             and not name.startswith("__MACOSX/")
@@ -54,28 +52,47 @@ def _source_tracks(url: str):
             raise ValueError("No INTERACTION vehicle track CSV files found in archive")
         for path in paths:
             tracks = defaultdict(list)
-            with archive.open(path) as binary:
-                with io.TextIOWrapper(binary, encoding="utf-8-sig", newline="") as text:
-                    reader = csv.DictReader(text)
-                    required = {"track_id", "timestamp_ms", "agent_type", "x", "y", "vx", "vy", "psi_rad"}
-                    if not required.issubset(reader.fieldnames or ()):
-                        raise ValueError(f"Missing columns in {path}: {required - set(reader.fieldnames or ())}")
-                    for row in reader:
-                        try:
-                            tracks[row["track_id"]].append((
+            with (
+                archive.open(path) as binary,
+                io.TextIOWrapper(binary, encoding="utf-8-sig", newline="") as text,
+            ):
+                reader = csv.DictReader(text)
+                required = {
+                    "track_id",
+                    "timestamp_ms",
+                    "agent_type",
+                    "x",
+                    "y",
+                    "vx",
+                    "vy",
+                    "psi_rad",
+                }
+                if not required.issubset(reader.fieldnames or ()):
+                    raise ValueError(
+                        f"Missing columns in {path}: {required - set(reader.fieldnames or ())}"
+                    )
+                for row in reader:
+                    try:
+                        tracks[row["track_id"]].append(
+                            (
                                 int(row["timestamp_ms"]) / 1000.0,
-                                float(row["x"]), float(row["y"]),
-                                float(row["vx"]), float(row["vy"]),
-                                float(row["psi_rad"]), row["agent_type"],
-                            ))
-                        except (ValueError, TypeError) as exc:
-                            raise ValueError(f"Invalid vehicle row in {path}") from exc
+                                float(row["x"]),
+                                float(row["y"]),
+                                float(row["vx"]),
+                                float(row["vy"]),
+                                float(row["psi_rad"]),
+                                row["agent_type"],
+                            )
+                        )
+                    except (ValueError, TypeError) as exc:
+                        raise ValueError(f"Invalid vehicle row in {path}") from exc
             for track_id, rows in tracks.items():
                 yield path, track_id, rows
 
 
-def _windows(path, track_id, rows, *, duration, sample_rate, stride,
-             coordinate_frame, max_gap, max_speed):
+def _windows(
+    path, track_id, rows, *, duration, sample_rate, stride, coordinate_frame, max_gap, max_speed
+):
     rows.sort(key=lambda row: row[0])
     times = np.array([row[0] for row in rows], dtype=np.float64)
     xy = np.array([row[1:3] for row in rows], dtype=np.float64)
@@ -90,10 +107,12 @@ def _windows(path, track_id, rows, *, duration, sample_rate, stride,
     # Split at missing observations, duplicate/reversed times, or impossible jumps.
     dt = np.diff(times)
     step_speed = np.linalg.norm(np.diff(xy, axis=0), axis=1) / np.maximum(dt, 1e-12)
-    cuts = np.flatnonzero(
-        (dt <= 0) | (dt > max_gap) | (step_speed > max_speed)
-        | ~np.isfinite(step_speed)
-    ) + 1
+    cuts = (
+        np.flatnonzero(
+            (dt <= 0) | (dt > max_gap) | (step_speed > max_speed) | ~np.isfinite(step_speed)
+        )
+        + 1
+    )
     for segment in np.split(np.arange(len(times)), cuts):
         if len(segment) < 2:
             continue
@@ -104,13 +123,12 @@ def _windows(path, track_id, rows, *, duration, sample_rate, stride,
         if last_start < t[0] - 1e-9:
             continue
         # Starts are spaced in physical time, independent of source frame rate.
-        starts = t[0] + np.arange(
-            int(np.floor((last_start - t[0] + 1e-9) / stride)) + 1
-        ) * stride
+        starts = t[0] + np.arange(int(np.floor((last_start - t[0] + 1e-9) / stride)) + 1) * stride
         for start in starts:
             target = start + grid
-            sampled = np.column_stack((np.interp(target, t, p[:, 0]),
-                                       np.interp(target, t, p[:, 1])))
+            sampled = np.column_stack(
+                (np.interp(target, t, p[:, 0]), np.interp(target, t, p[:, 1]))
+            )
             index = segment[np.searchsorted(t, start, side="left")]
             angle = headings[index]
             if not np.isfinite(angle):
@@ -163,21 +181,35 @@ def load_trajectories(
         raise ValueError("Only dataset='interaction' is implemented")
     if coordinate_frame not in ("ego", "world"):
         raise ValueError("coordinate_frame must be 'ego' or 'world'")
-    if (not isinstance(num_trajectories, int) or num_trajectories < 1
-            or not isinstance(sample_rate, int) or sample_rate < 1
-            or not isinstance(seed, int)):
-        raise ValueError("num_trajectories and sample_rate must be positive integers; seed must be an integer")
+    if (
+        not isinstance(num_trajectories, int)
+        or num_trajectories < 1
+        or not isinstance(sample_rate, int)
+        or sample_rate < 1
+        or not isinstance(seed, int)
+    ):
+        raise ValueError(
+            "num_trajectories and sample_rate must be positive integers; seed must be an integer"
+        )
     if not all(np.isfinite(v) and v > 0 for v in (duration, stride, max_gap, max_speed)):
         raise ValueError("duration, stride, max_gap, and max_speed must be positive finite values")
     if abs(duration * sample_rate - round(duration * sample_rate)) > 1e-9:
         raise ValueError("duration * sample_rate must be an integer")
 
-    settings = dict(version=_CACHE_VERSION, dataset=dataset.lower(),
-                    source_url=source_url, source_sha256=(
-                        INTERACTION_TC_SHA256 if source_url == INTERACTION_TC_URL else None),
-                    num_trajectories=num_trajectories, duration=duration,
-                    sample_rate=sample_rate, coordinate_frame=coordinate_frame,
-                    seed=seed, stride=stride, max_gap=max_gap, max_speed=max_speed)
+    settings = dict(
+        version=_CACHE_VERSION,
+        dataset=dataset.lower(),
+        source_url=source_url,
+        source_sha256=(INTERACTION_TC_SHA256 if source_url == INTERACTION_TC_URL else None),
+        num_trajectories=num_trajectories,
+        duration=duration,
+        sample_rate=sample_rate,
+        coordinate_frame=coordinate_frame,
+        seed=seed,
+        stride=stride,
+        max_gap=max_gap,
+        max_speed=max_speed,
+    )
     key = hashlib.sha256(json.dumps(settings, sort_keys=True).encode()).hexdigest()[:20]
     cache_path = Path(root) / ".cache" / f"interaction_{key}.npz"
     if cache and cache_path.is_file() and not refresh:
@@ -187,17 +219,24 @@ def load_trajectories(
     candidates, metadata = [], []
     for path, track_id, rows in _source_tracks(source_url):
         for trajectory, info in _windows(
-            path, track_id, rows, duration=duration, sample_rate=sample_rate,
-            stride=stride, coordinate_frame=coordinate_frame,
-            max_gap=max_gap, max_speed=max_speed,
+            path,
+            track_id,
+            rows,
+            duration=duration,
+            sample_rate=sample_rate,
+            stride=stride,
+            coordinate_frame=coordinate_frame,
+            max_gap=max_gap,
+            max_speed=max_speed,
         ):
             candidates.append(trajectory)
             metadata.append(info)
     if not candidates:
         raise ValueError("No valid trajectory windows found; try a shorter duration")
     rng = np.random.default_rng(seed)
-    selected = rng.choice(len(candidates), size=min(num_trajectories, len(candidates)),
-                          replace=False)
+    selected = rng.choice(
+        len(candidates), size=min(num_trajectories, len(candidates)), replace=False
+    )
     trajectories = np.stack([candidates[i] for i in selected])
     metadata = [metadata[i] for i in selected]
 
@@ -205,11 +244,13 @@ def load_trajectories(
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         temporary = None
         try:
-            with tempfile.NamedTemporaryFile(dir=cache_path.parent, suffix=".npz",
-                                             delete=False) as output:
+            with tempfile.NamedTemporaryFile(
+                dir=cache_path.parent, suffix=".npz", delete=False
+            ) as output:
                 temporary = Path(output.name)
-                np.savez_compressed(output, trajectories=trajectories,
-                                    metadata_json=json.dumps(metadata))
+                np.savez_compressed(
+                    output, trajectories=trajectories, metadata_json=json.dumps(metadata)
+                )
             os.replace(temporary, cache_path)
         finally:
             if temporary is not None:
@@ -217,10 +258,18 @@ def load_trajectories(
     return trajectories, metadata
 
 
-def iter_trajectory_batches(*, dataset="interaction", source_url=INTERACTION_TC_URL,
-                            batch_size=2048, duration=5.0, sample_rate=10,
-                            stride=1.0, coordinate_frame="ego",
-                            max_gap=0.3, max_speed=70.0):
+def iter_trajectory_batches(
+    *,
+    dataset="interaction",
+    source_url=INTERACTION_TC_URL,
+    batch_size=2048,
+    duration=5.0,
+    sample_rate=10,
+    stride=1.0,
+    coordinate_frame="ego",
+    max_gap=0.3,
+    max_speed=70.0,
+):
     """Yield (positions, metadata) batches without collecting all windows.
 
     This reopens the small source archive on each iteration, so a repeatable
@@ -229,14 +278,23 @@ def iter_trajectory_batches(*, dataset="interaction", source_url=INTERACTION_TC_
     """
     if dataset.lower() != "interaction" or batch_size < 1:
         raise ValueError("Require dataset='interaction' and positive batch_size")
-    if coordinate_frame not in ("ego", "world") or abs(duration * sample_rate - round(duration * sample_rate)) > 1e-9:
+    if (
+        coordinate_frame not in ("ego", "world")
+        or abs(duration * sample_rate - round(duration * sample_rate)) > 1e-9
+    ):
         raise ValueError("Invalid coordinate frame or temporal grid")
     positions, metadata = [], []
     for path, track_id, rows in _source_tracks(source_url):
         for trajectory, info in _windows(
-            path, track_id, rows, duration=duration, sample_rate=sample_rate,
-            stride=stride, coordinate_frame=coordinate_frame,
-            max_gap=max_gap, max_speed=max_speed,
+            path,
+            track_id,
+            rows,
+            duration=duration,
+            sample_rate=sample_rate,
+            stride=stride,
+            coordinate_frame=coordinate_frame,
+            max_gap=max_gap,
+            max_speed=max_speed,
         ):
             positions.append(trajectory)
             metadata.append(info)
@@ -249,5 +307,7 @@ def iter_trajectory_batches(*, dataset="interaction", source_url=INTERACTION_TC_
 
 if __name__ == "__main__":
     batch, details = load_trajectories()
-    print(f"Loaded {batch.shape[0]} trajectories of shape {batch.shape[1:]} from "
-          f"{len({item['source_file'] for item in details})} CSV files")
+    print(
+        f"Loaded {batch.shape[0]} trajectories of shape {batch.shape[1:]} from "
+        f"{len({item['source_file'] for item in details})} CSV files"
+    )

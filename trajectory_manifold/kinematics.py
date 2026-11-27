@@ -10,9 +10,13 @@ from __future__ import annotations
 import numpy as np
 
 
-def infer_kinematics(positions: np.ndarray, sample_rate: float = 10.0,
-                     window: int = 7, degree: int = 3,
-                     min_speed: float = 0.5):
+def infer_kinematics(
+    positions: np.ndarray,
+    sample_rate: float = 10.0,
+    window: int = 7,
+    degree: int = 3,
+    min_speed: float = 0.5,
+):
     """Return ``(states, actions, valid)`` for (N,T,2) or (T,2) positions.
 
     states are [x, y, yaw, speed] in m, rad, m/s; actions are [accel,
@@ -32,7 +36,12 @@ def infer_kinematics(positions: np.ndarray, sample_rate: float = 10.0,
         raise ValueError("positions must have shape (N,T,2) or (T,2), T >= 4")
     if not np.isfinite(data).all():
         raise ValueError("positions must be finite")
-    if not np.isfinite(sample_rate) or sample_rate <= 0 or not np.isfinite(min_speed) or min_speed <= 0:
+    if (
+        not np.isfinite(sample_rate)
+        or sample_rate <= 0
+        or not np.isfinite(min_speed)
+        or min_speed <= 0
+    ):
         raise ValueError("sample_rate and min_speed must be positive finite values")
     if window < 4 or window % 2 != 1 or degree < 2 or degree >= window:
         raise ValueError("window must be odd and >= 5; require 2 <= degree < window")
@@ -44,7 +53,7 @@ def infer_kinematics(positions: np.ndarray, sample_rate: float = 10.0,
         start = min(max(0, i - width // 2), frames - width)
         offsets = (np.arange(start, start + width) - i) / sample_rate
         fit = np.linalg.pinv(np.vander(offsets, degree + 1, increasing=True))
-        chunk = data[:, start:start + width, :]
+        chunk = data[:, start : start + width, :]
         velocity[:, i, :] = np.einsum("j,njd->nd", fit[1], chunk)
         second[:, i, :] = np.einsum("j,njd->nd", 2 * fit[2], chunk)
 
@@ -57,7 +66,8 @@ def infer_kinematics(positions: np.ndarray, sample_rate: float = 10.0,
         accel = (vx * ax + vy * ay) / speed
         curvature = (vx * ay - vy * ax) / speed**3
     yaw = np.where(valid, yaw, np.nan)
-    actions = np.stack((np.where(valid, accel, np.nan),
-                        np.where(valid, curvature, np.nan)), axis=-1)
+    actions = np.stack(
+        (np.where(valid, accel, np.nan), np.where(valid, curvature, np.nan)), axis=-1
+    )
     states = np.concatenate((data, yaw[..., None], speed[..., None]), axis=-1)
     return (states[0], actions[0], valid[0]) if single else (states, actions, valid)

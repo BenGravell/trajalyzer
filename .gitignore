@@ -3,3 +3,7 @@ data/
 web/node_modules/
 web/dist/
 .venv/
+*.egg-info/
+.ruff_cache/
+.pytest_cache/
+.pre-commit/

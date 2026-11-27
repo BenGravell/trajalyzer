@@ -18,26 +18,38 @@ every driving behavior.
 ## Run locally
 
 ```bash
-cd web
-npm ci
-npm run dev
+python -m venv .venv
+source .venv/bin/activate
+pip install -e '.[dev,viewer]'
+npm --prefix web ci
+pre-commit install --hook-type pre-commit --hook-type pre-push
+npm --prefix web run dev
 ```
 
-From the repository root, regenerate the four `web/public/*.rrd` recordings,
-action sequences, cluster assignments, exemplars,
-and the canvas sample from the official 4.5 MB archive:
+From the repository root, one command regenerates all four Rerun recordings,
+action sequences, cluster assignments, exemplars, and the canvas sample:
 
 ```bash
-python -m pip install numpy scikit-learn rerun-sdk==0.31.1
-for cohort in all center positive negative; do
-  python scripts/build_recording.py --cohort "$cohort"
-done
+python scripts/build_recording.py
 ```
+
+The committed `web/public` assets are ready to use. Regenerate them only when
+the dataset sampling, inference, or clustering code changes.
 
 The archive is downloaded into memory. Processed windows are cached under
 `data/.cache`; the original ZIP is never stored locally. The core loader only
 requires NumPy. You can also run the Python Rerun viewer with
 `python -m trajectory_manifold.viewer`.
+
+## Fast feedback
+
+Run `./scripts/check.sh` before publishing. It runs Ruff, Black's format check,
+the Python unit tests, ESLint, Prettier, and the Vite production build. Commit
+hooks run the fast formatters and linters on changed files; the push hook runs
+the full gate. GitHub Actions runs that same script before deploying Pages.
+Use `black trajectory_manifold scripts tests` and `npm --prefix web run format`
+to apply formatting. `ruff check --fix trajectory_manifold scripts tests`
+handles safe Python lint fixes.
 
 ## Kinematic actions and exemplars
 
