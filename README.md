@@ -7,8 +7,9 @@ converted to five-second, 10 Hz ego-relative windows. The Rerun web recording
 contains a reproducible 500-window sample from a 5,000-window batch. An Astryx
 React shell provides lateral-displacement cohorts, playback, timeline scrubbing,
 dataset context, and a responsive inspector around the embedded Rerun viewer.
-This first
-subset is one intersection and is not representative of every driving behavior.
+On browsers without WebGL2, a lightweight 2D canvas uses the same sample and
+controls. This first subset is one intersection and is not representative of
+every driving behavior.
 
 ## Run locally
 
@@ -18,7 +19,8 @@ npm ci
 npm run dev
 ```
 
-To regenerate `web/public/recording.rrd` from the official 4.5 MB archive:
+From the repository root, regenerate the four `web/public/*.rrd` recordings
+and the canvas sample from the official 4.5 MB archive:
 
 ```bash
 python -m pip install numpy rerun-sdk==0.31.1

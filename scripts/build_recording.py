@@ -43,6 +43,13 @@ def main():
             "duration_s": 5, "sample_rate_hz": 10,
             "dataset": "INTERACTION TC_BGR_Intersection_VA",
         }, indent=2) + "\n")
+        # Int16 centimetres: 100 kB for 500 × 50 × 2, for the canvas fallback.
+        scaled = np.rint(sample * 100)
+        if np.max(np.abs(scaled)) > 32767:
+            raise ValueError("Trajectory exceeds Int16 centimetre range")
+        (output_dir / "trajectories.bin").write_bytes(
+            scaled.astype("<i2").tobytes()
+        )
     subset = sample[masks[args.cohort]]
     destination = output_dir / f"{args.cohort}.rrd"
     rr.init(f"ego_trajectory_{args.cohort}")
