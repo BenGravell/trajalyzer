@@ -239,22 +239,23 @@ fn process_partition(path: &Path, source: &Path, model: &Model, builder: &mut Bu
 }
 fn process_csv(path: &Path, model: &Model, builder: &mut Builder, weights: &[(usize, [f64; 7], [f64; 7])]) -> Result<()> {
     // Hash partitioning bounds memory even if one CSV contains millions of rows.
-    // All rows for a track land in the same temporary partition.
-    const PARTITIONS: usize = 64;
+    // All rows for a track land in the same temporary partition. Small files
+    // need just one partition; large files target roughly 16 MiB of raw CSV.
+    let partitions = (fs::metadata(path)?.len().div_ceil(16 * 1024 * 1024) as usize).clamp(1, 256);
     let stage = builder.root.join(".stage");
     fs::create_dir_all(&stage)?;
-    let mut writers: Vec<_> = (0..PARTITIONS)
+    let mut writers: Vec<_> = (0..partitions)
         .map(|i| csv::Writer::from_path(stage.join(format!("{i:02}.csv"))))
         .collect::<std::result::Result<_, _>>()?;
     for row in csv::Reader::from_path(path)?.deserialize::<Row>() {
         let row = row?;
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         row.track_id.hash(&mut hasher);
-        writers[(hasher.finish() as usize) % PARTITIONS].serialize(row)?;
+        writers[(hasher.finish() as usize) % partitions].serialize(row)?;
     }
     for writer in &mut writers { writer.flush()?; }
     drop(writers);
-    for i in 0..PARTITIONS {
+    for i in 0..partitions {
         let partition = stage.join(format!("{i:02}.csv"));
         process_partition(&partition, path, model, builder, weights)?;
         fs::remove_file(partition)?;
@@ -294,5 +295,29 @@ mod tests {
         let (a, f) = actions_and_features(&p, &stencils()).unwrap();
         assert_eq!(f.len(), 125);
         for pair in a { assert!((pair[0] - 1.0).abs() < 1e-3); assert!(pair[1].abs() < 1e-5); }
+    }
+    #[test]
+    fn csv_pipeline_emits_addressable_shards() {
+        let root = std::env::temp_dir().join(format!("trajalyzer-test-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let csv_path = root.join("vehicle_tracks_test.csv");
+        let mut csv = File::create(&csv_path).unwrap();
+        writeln!(csv, "track_id,timestamp_ms,x,y,vx,vy,psi_rad").unwrap();
+        for i in 0..60 { writeln!(csv, "7,{},{},0,4,0,0", i * 100, i as f64 * 0.4).unwrap(); }
+        drop(csv);
+        let mut sample = [[0.0; 2]; FRAMES];
+        for (i, point) in sample.iter_mut().enumerate() { point[0] = i as f32 * 0.4; }
+        let weights = stencils();
+        let (_, feature) = actions_and_features(&sample, &weights).unwrap();
+        let model = Model { features: vec![feature] };
+        let mut builder = Builder::new(root.join("out")).unwrap();
+        process_csv(&csv_path, &model, &mut builder, &weights).unwrap();
+        builder.finish().unwrap();
+        let manifest: serde_json::Value = serde_json::from_reader(File::open(root.join("out/manifest.json")).unwrap()).unwrap();
+        assert_eq!(manifest["count"], 2);
+        assert_eq!(manifest["shards"][0]["count"], 2);
+        let first = manifest["shards"][0]["path"].as_str().unwrap();
+        assert_eq!(fs::metadata(root.join("out").join(first)).unwrap().len(), 416);
+        fs::remove_dir_all(root).unwrap();
     }
 }

@@ -41,6 +41,8 @@ jobs:
       - run: cargo test --manifest-path native/Cargo.toml
       - run: python scripts/build_corpus.py
       - run: ./scripts/check.sh
+        env:
+          VITE_CORPUS_BASE_URL: ${{ vars.VITE_CORPUS_BASE_URL }}
       - uses: actions/configure-pages@v5
         with:
           enablement: true

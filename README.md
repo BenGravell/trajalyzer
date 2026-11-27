@@ -117,8 +117,8 @@ python scripts/build_native_corpus.py --input /path/to/interaction/csv --model d
 ```
 
 Omit `--input` to fetch and verify the small official TC archive automatically.
-The Rust builder groups one source file at a time through 64 temporary disk
-partitions, segments tracks on time gaps and impossible jumps, resamples 50
+The Rust builder groups one source file at a time through temporary disk
+partitions sized from its source bytes, segments tracks on time gaps and impossible jumps, resamples 50
 positions at 10 Hz, excludes windows below 1 m/s, infers acceleration and
 curvature with the same seven-point cubic local fit, assigns the nearest
 observed exemplar, and writes independent, cacheable shards. It also writes
@@ -139,8 +139,8 @@ The Parquet files are partitioned by cohort and cluster with fixed-size Arrow
 lists. Read them with Polars `scan_parquet` or Arrow Dataset scanners; the web
 app uses the lean binary shards rather than parsing Parquet in a mobile browser.
 For a corpus too large for GitHub Pages, upload the corpus directory to an
-object store/CDN and set `VITE_CORPUS_BASE_URL` (ending in `/`) in the Pages
-build environment. Configure CORS for the Pages origin. The Pages repository
+object store/CDN and set the repository Actions variable `VITE_CORPUS_BASE_URL`
+to its public URL (ending in `/`). Configure CORS for the Pages origin. The Pages repository
 then contains the application and small diagnostic sample, while the CDN serves
 immutable corpus shards. Changing the manifest should be deployed atomically
 with its shards. The currently bundled source has only one intersection and
