@@ -7,7 +7,23 @@ Local least-squares cubic fits estimate derivatives without an extra dependency.
 
 from __future__ import annotations
 
+from functools import lru_cache
+
 import numpy as np
+
+
+@lru_cache(maxsize=32)
+def _derivative_weights(frames: int, width: int, degree: int, sample_rate: float):
+    """Reusable local-fit stencils, independent of the trajectory batch."""
+    starts = []
+    weights = []
+    for i in range(frames):
+        start = min(max(0, i - width // 2), frames - width)
+        offsets = (np.arange(start, start + width) - i) / sample_rate
+        fit = np.linalg.pinv(np.vander(offsets, degree + 1, increasing=True))
+        starts.append(start)
+        weights.append((fit[1], 2 * fit[2]))
+    return tuple(starts), tuple(weights)
 
 
 def infer_kinematics(
@@ -49,13 +65,11 @@ def infer_kinematics(
     width = min(window, frames)
     velocity = np.empty_like(data)
     second = np.empty_like(data)
-    for i in range(frames):
-        start = min(max(0, i - width // 2), frames - width)
-        offsets = (np.arange(start, start + width) - i) / sample_rate
-        fit = np.linalg.pinv(np.vander(offsets, degree + 1, increasing=True))
+    starts, weights = _derivative_weights(frames, width, degree, sample_rate)
+    for i, (start, (first, second_weight)) in enumerate(zip(starts, weights, strict=True)):
         chunk = data[:, start : start + width, :]
-        velocity[:, i, :] = np.einsum("j,njd->nd", fit[1], chunk)
-        second[:, i, :] = np.einsum("j,njd->nd", 2 * fit[2], chunk)
+        velocity[:, i, :] = np.einsum("j,njd->nd", first, chunk)
+        second[:, i, :] = np.einsum("j,njd->nd", second_weight, chunk)
 
     vx, vy = velocity[..., 0], velocity[..., 1]
     ax, ay = second[..., 0], second[..., 1]

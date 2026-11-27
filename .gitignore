@@ -7,3 +7,6 @@ web/dist/
 .ruff_cache/
 .pytest_cache/
 .pre-commit/
+.tools/
+web/public/corpus/
+native/target/

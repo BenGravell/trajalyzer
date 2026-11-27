@@ -91,3 +91,57 @@ Rerun version 0.31.1. The Astryx Core, theme, and CLI share version 0.7.17.
 INTERACTION Dataset: Zhan et al., *INTERACTION Dataset: An INTERnational,
 Adversarial and Cooperative moTION Dataset in Interactive Driving Scenarios
 with Semantic Maps*, arXiv:1910.03088 (2019).
+
+## Indexed corpus mode
+
+The landing view now reads `web/public/corpus/manifest.json`, requests at most
+32 position shards concurrently in a six-request pool, and displays at most
+768 windows. It downloads a selected shard's actions on demand. Filters count
+all matching windows in the manifest while the display remains bounded; the
+position slider refers to **loaded** paths. The Rerun diagnostic view remains
+available on demand and is loaded as a separate JavaScript module.
+
+The checked-in corpus is a 500-window protocol demonstration built from the
+previous sample:
+
+```bash
+python scripts/build_corpus.py
+```
+
+For a larger INTERACTION CSV collection, fit exemplars on training tracks with
+the existing scikit-learn pipeline, export the model, and run the native builder:
+
+```bash
+python scripts/export_exemplars.py data/.cache/exemplar_model.npz data/.cache/exemplars.json
+python scripts/build_native_corpus.py --input /path/to/interaction/csv --model data/.cache/exemplars.json --output /path/to/corpus
+```
+
+Omit `--input` to fetch and verify the small official TC archive automatically.
+The Rust builder groups one source file at a time through 64 temporary disk
+partitions, segments tracks on time gaps and impossible jumps, resamples 50
+positions at 10 Hz, excludes windows below 1 m/s, infers acceleration and
+curvature with the same seven-point cubic local fit, assigns the nearest
+observed exemplar, and writes independent, cacheable shards. It also writes
+`index.csv` with source track and start time for provenance. The static shard
+protocol stores 208 bytes per path (100 int16 centimetre coordinates, uint32
+trajectory ID, float32 exemplar distance); actions occupy a separate 400-byte
+file per path. The collection is never held in memory as one array. Native
+Rust tests, format, and Clippy run in the Pages workflow.
+
+Optionally export a columnar analytical mirror:
+
+```bash
+pip install -e '.[corpus]'
+python scripts/export_parquet.py /path/to/corpus /path/to/parquet
+```
+
+The Parquet files are partitioned by cohort and cluster with fixed-size Arrow
+lists. Read them with Polars `scan_parquet` or Arrow Dataset scanners; the web
+app uses the lean binary shards rather than parsing Parquet in a mobile browser.
+For a corpus too large for GitHub Pages, upload the corpus directory to an
+object store/CDN and set `VITE_CORPUS_BASE_URL` (ending in `/`) in the Pages
+build environment. Configure CORS for the Pages origin. The Pages repository
+then contains the application and small diagnostic sample, while the CDN serves
+immutable corpus shards. Changing the manifest should be deployed atomically
+with its shards. The currently bundled source has only one intersection and
+must not be interpreted as a million independent behaviors.
