@@ -15,22 +15,21 @@ const groups = [
   { value: 'positive', label: 'Positive lateral' },
   { value: 'negative', label: 'Negative lateral' },
 ];
-const MAX_SHARDS = 32;
+const MAX_SHARDS = 6;
 const MAX_VISIBLE = 768;
 
-function selectShards(manifest, cohort, cluster) {
+function selectShards(manifest, cohort, cluster, page) {
   const eligible = manifest.shards.filter(
     (s) =>
       (cohort === 'all' || s.cohort === cohort) &&
       (cluster === 'all' || s.cluster === Number(cluster)),
   );
   // Spread requests over the corpus, preserving diversity across partitions.
-  const count = Math.min(MAX_SHARDS, eligible.length);
-  const chosen = Array.from(
-    { length: count },
-    (_, i) => eligible[Math.floor(((i + 0.5) * eligible.length) / count)],
+  const pages = Math.max(1, Math.ceil(eligible.length / MAX_SHARDS));
+  const chosen = Array.from({ length: MAX_SHARDS }, (_, i) => eligible[i * pages + page]).filter(
+    Boolean,
   );
-  return { count: eligible.reduce((sum, s) => sum + s.count, 0), chosen };
+  return { count: eligible.reduce((sum, s) => sum + s.count, 0), chosen, pages };
 }
 
 async function fetchPaths(shards, signal) {
@@ -76,6 +75,7 @@ export default function CorpusExplorer({ onDiagnostics }) {
   const [manifest, setManifest] = useState(null);
   const [cohort, setCohort] = useState('all');
   const [cluster, setCluster] = useState('all');
+  const [page, setPage] = useState(0);
   const [rows, setRows] = useState([]);
   const [selected, setSelected] = useState(0);
   const [time, setTime] = useState(0);
@@ -102,8 +102,8 @@ export default function CorpusExplorer({ onDiagnostics }) {
     return () => controller.abort();
   }, []);
   const selection = useMemo(
-    () => manifest && selectShards(manifest, cohort, cluster),
-    [manifest, cohort, cluster],
+    () => manifest && selectShards(manifest, cohort, cluster, page),
+    [manifest, cohort, cluster, page],
   );
   useEffect(() => {
     if (!selection) return;
@@ -228,7 +228,10 @@ export default function CorpusExplorer({ onDiagnostics }) {
               label="Lateral group"
               value={cohort}
               options={groups}
-              onChange={(value) => setCohort(value || 'all')}
+              onChange={(value) => {
+                setPage(0);
+                setCohort(value || 'all');
+              }}
               presentation="adaptive"
             />
             <Selector
@@ -238,8 +241,22 @@ export default function CorpusExplorer({ onDiagnostics }) {
                 { value: 'all', label: 'All exemplars' },
                 ...clusters.map((c) => ({ value: String(c), label: `Exemplar ${c + 1}` })),
               ]}
-              onChange={(value) => setCluster(value || 'all')}
+              onChange={(value) => {
+                setPage(0);
+                setCluster(value || 'all');
+              }}
               presentation="adaptive"
+            />
+            <Slider
+              label="Corpus page"
+              value={page + 1}
+              min={1}
+              max={selection?.pages ?? 1}
+              step={1}
+              onChange={(value) => setPage(value - 1)}
+              formatValue={(value) => `${value} / ${selection?.pages ?? 1}`}
+              valueDisplay="text"
+              isDisabled={!selection || selection.pages < 2}
             />
             <Slider
               label="Inspect loaded path"

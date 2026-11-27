@@ -95,10 +95,10 @@ with Semantic Maps*, arXiv:1910.03088 (2019).
 ## Indexed corpus mode
 
 The landing view now reads `web/public/corpus/manifest.json`, requests at most
-32 position shards concurrently in a six-request pool, and displays at most
-768 windows. It downloads a selected shard's actions on demand. Filters count
-all matching windows in the manifest while the display remains bounded; the
-position slider refers to **loaded** paths. The Rerun diagnostic view remains
+six position shards and displays at most 768 windows. The corpus page control
+covers every shard in successive views. It downloads a selected shard's
+actions on demand. Filters count all matching windows in the manifest while
+the display remains bounded; the path slider refers to **loaded** paths. The Rerun diagnostic view remains
 available on demand and is loaded as a separate JavaScript module.
 
 The checked-in corpus is a 500-window protocol demonstration built from the
