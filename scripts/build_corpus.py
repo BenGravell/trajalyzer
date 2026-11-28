@@ -20,7 +20,7 @@ def main():
     parser.add_argument("--output", type=Path, default=Path("data/interaction-corpus"))
     parser.add_argument("--parquet", action="store_true")
     args = parser.parse_args()
-    source = Path(__file__).resolve().parents[1] / "data" / "published"
+    source = Path(__file__).resolve().parents[1] / "data"
     paths = np.frombuffer((source / "trajectories.bin").read_bytes(), dtype="<i2")
     paths = paths.reshape(-1, 50, 2).astype(np.float32) / 100
     actions = np.frombuffer((source / "actions.bin").read_bytes(), dtype="<f4").reshape(-1, 50, 2)

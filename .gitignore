@@ -1,5 +1,8 @@
 /data/*
-!/data/published/
+!/data/corpus/
+!/data/*.bin
+!/data/*.json
+!/data/*.rrd
 **/__pycache__/
 web/node_modules/
 web/dist/
