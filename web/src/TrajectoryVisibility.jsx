@@ -1,8 +1,8 @@
 import { Selector } from '@astryxdesign/core/Selector';
 
 const options = [
-  { value: 'all', label: 'All paths in current group' },
-  { value: 'exemplar', label: 'Selected exemplar group' },
+  { value: 'all', label: 'All loaded paths' },
+  { value: 'exemplar', label: 'Paths in selected exemplar' },
   { value: 'selected', label: 'Selected path only' },
 ];
 

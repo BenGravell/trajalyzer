@@ -3,12 +3,12 @@
  * @astryx-theme-record {"themes":{"neutral":"@astryxdesign/theme-neutral"},"defaultThemeSlug":"neutral"}
  */
 
-import { neutralTheme as _astryxTheme0 } from '@astryxdesign/theme-neutral/built';
-import '@astryxdesign/theme-neutral/theme.css';
-import '@astryxdesign/theme-neutral/fonts.css';
+import {neutralTheme as _astryxTheme0} from "@astryxdesign/theme-neutral/built";
+import "@astryxdesign/theme-neutral/theme.css";
+import "@astryxdesign/theme-neutral/fonts.css";
 
 export const themes = {
-  neutral: _astryxTheme0,
+  "neutral": _astryxTheme0,
 };
 
-export const defaultThemeSlug = 'neutral';
+export const defaultThemeSlug = "neutral";

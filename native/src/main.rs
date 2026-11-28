@@ -154,7 +154,7 @@ impl Builder {
         let cohort = if lateral > 3.0 { "positive" } else if lateral < -3.0 { "negative" } else { "center" };
         let id = u32::try_from(self.count)?;
         let source_name = source.file_name().ok_or("Missing source file name")?.to_string_lossy();
-        // Source filenames and INTERACTION numeric track IDs are plain CSV tokens.
+        // Source filenames and track IDs are plain CSV tokens.
         writeln!(self.index, "{id},{source_name},{track},{start:.3},{cohort},{cluster}")?;
         let key = (cohort.to_owned(), cluster);
         let bucket = self.pending.entry(key.clone()).or_default();

@@ -38,11 +38,6 @@ body {
   color: var(--color-text-secondary);
   font-size: var(--text-body-size);
 }
-.header-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-3);
-}
 .workspace {
   flex: 1;
   min-height: 0;
@@ -130,6 +125,36 @@ body {
   position: relative;
   flex: 1;
   min-height: 20rem;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+.rerun-viewport {
+  min-height: 0;
+}
+.rerun-surface {
+  width: 100%;
+  height: 100%;
+}
+.rerun-surface canvas {
+  display: block;
+}
+.compact-playback {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-4);
+  padding: var(--spacing-3) var(--spacing-4);
+  background: var(--color-background-surface);
+}
+.compact-scrubber {
+  flex: 1;
+  min-width: 0;
+}
+.viewer-status {
+  position: absolute;
+  inset: var(--spacing-4) auto auto var(--spacing-4);
+  margin: 0;
+  padding: var(--spacing-3);
+  background: var(--color-background-surface);
 }
 .error {
   position: absolute;
@@ -138,120 +163,6 @@ body {
   color: var(--color-on-error);
   padding: var(--spacing-4);
   border-radius: var(--radius-element);
-}
-.canvas-shell {
-  position: relative;
-  flex: 1;
-  min-height: 20rem;
-  background: #101722;
-  overflow: hidden;
-}
-.canvas-shell canvas {
-  display: block;
-  width: 100%;
-  height: 100%;
-  touch-action: none;
-  cursor: grab;
-}
-.canvas-shell canvas:active {
-  cursor: grabbing;
-}
-.canvas-note {
-  position: absolute;
-  bottom: 1rem;
-  left: 1rem;
-  pointer-events: none;
-  color: #c8d9e8;
-  background: #172534d9;
-  padding: 0.45rem 0.7rem;
-  border-radius: 0.5rem;
-  font-size: 0.7rem;
-}
-.cluster-tag {
-  display: inline-flex;
-  width: max-content;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 0.85rem;
-  font-weight: 700;
-}
-.cluster-tag:before {
-  content: '';
-  width: 0.8rem;
-  height: 0.8rem;
-  border-radius: 50%;
-  background: var(--tag-color);
-}
-.diagnostics {
-  border-top: var(--border-width) solid var(--color-border);
-  background: var(--color-background-surface);
-  padding: var(--spacing-3) var(--spacing-4);
-}
-.diagnostics-heading {
-  display: flex;
-  justify-content: space-between;
-  gap: var(--spacing-2);
-  align-items: baseline;
-  font-size: 0.8rem;
-}
-.diagnostics-heading small {
-  color: var(--color-text-secondary);
-  text-align: right;
-}
-.plot-grid-layout {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--spacing-4);
-}
-.action-plot {
-  min-width: 0;
-}
-.action-plot header {
-  display: flex;
-  justify-content: space-between;
-  gap: 0.5rem;
-  padding: 0.4rem 0;
-  font-size: 0.75rem;
-}
-.action-plot output {
-  font-variant-numeric: tabular-nums;
-  color: var(--color-text-secondary);
-}
-.plot-surface {
-  position: relative;
-  height: 8rem;
-  background: #111b29;
-  border-radius: 0.35rem;
-  overflow: hidden;
-}
-.plot-surface canvas,
-.plot-surface svg {
-  display: block;
-  width: 100%;
-  height: 100%;
-}
-.plot-surface svg {
-  position: absolute;
-  inset: 0;
-  touch-action: none;
-  cursor: crosshair;
-}
-.action-plot svg text {
-  fill: #8da3b6;
-  font: 10px system-ui;
-}
-.plot-grid {
-  stroke: #637388;
-  stroke-width: 1;
-  stroke-dasharray: 3 5;
-}
-.plot-grid.faint {
-  opacity: 0.35;
-}
-.plot-cursor {
-  stroke: #f5f6f8;
-  stroke-width: 1.5;
-  vector-effect: non-scaling-stroke;
 }
 footer {
   padding: var(--spacing-3) var(--spacing-6);
@@ -262,12 +173,6 @@ footer {
 a {
   color: var(--color-text-accent);
 }
-.focus .sidebar {
-  display: none;
-}
-.focus .workspace {
-  grid-template-columns: 1fr;
-}
 @media (max-width: 750px) {
   .app {
     height: auto;
@@ -275,9 +180,6 @@ a {
   }
   .masthead {
     padding: var(--spacing-3);
-  }
-  .header-actions {
-    gap: var(--spacing-2);
   }
   .workspace {
     height: auto;
@@ -302,25 +204,11 @@ a {
     order: 1;
     min-height: 58dvh;
   }
-  .viewer-host,
-  .canvas-shell {
-    min-height: 48dvh;
-  }
-  .focus .sidebar {
-    display: none;
+  .viewer-host {
+    min-height: 70dvh;
   }
   .viewer-heading small {
     display: none;
-  }
-  .plot-grid-layout {
-    grid-template-columns: 1fr;
-  }
-  .diagnostics-heading {
-    display: block;
-  }
-  .diagnostics-heading small {
-    display: block;
-    text-align: left;
   }
   footer {
     padding: var(--spacing-3);

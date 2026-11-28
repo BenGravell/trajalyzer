@@ -1,10 +1,3 @@
-no separate rerun and non-rerun trajectory canvas. pick one or the other. first explain the pros and cons of each option, then i will decide which to use going forward.
-
-
-
-
-
-
 https://github.com/BenGravell/trajalyzer/blob/main/trajectory_manifold/clustering.py
 
 Can using faiss with e-means provide a speedup or better clustering results?

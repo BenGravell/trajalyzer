@@ -1,11 +1,9 @@
 /data/*
 !/data/corpus/
-!/data/*.bin
-!/data/*.json
-!/data/*.rrd
 **/__pycache__/
 web/node_modules/
 web/dist/
+web/public/corpus/recordings/
 .venv/
 *.egg-info/
 .ruff_cache/
