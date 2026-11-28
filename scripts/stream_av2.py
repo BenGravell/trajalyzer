@@ -135,7 +135,7 @@ def stream_scenarios(keys, *, tracks, workers, writer):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--split", choices=("train", "val", "test"), default="train")
-    parser.add_argument("--tracks", choices=("av", "vehicles"), default="av")
+    parser.add_argument("--tracks", choices=("av", "vehicles"), default="vehicles")
     parser.add_argument("--limit-scenarios", type=int, default=1000)
     parser.add_argument("--all", action="store_true", help="Process the entire selected split")
     parser.add_argument("--start-after", help="Resume listing after an exact S3 object key")
