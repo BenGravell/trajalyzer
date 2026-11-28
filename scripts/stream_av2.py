@@ -19,6 +19,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
+from http.client import IncompleteRead
 from pathlib import Path
 
 import pyarrow as pa
@@ -47,7 +48,7 @@ def read_public(url, *, timeout=60):
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 return response.read()
-        except OSError as error:
+        except (OSError, IncompleteRead) as error:
             if isinstance(error, urllib.error.HTTPError) and error.code not in (
                 429,
                 500,

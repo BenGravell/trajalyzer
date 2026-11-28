@@ -6,18 +6,21 @@ Each complete track produces **one** 110-position window on the half-open grid `
 
 ## Stream, fit, and pack
 
-Install Python with the `corpus` extra (PyArrow and scikit-learn), and Cargo. From the repository root:
+Install Python with the `corpus` and `cluster` extras (PyArrow and scikit-learn), and Cargo. From the repository root:
 
 ```bash
-pip install -e '.[corpus]'
+pip install -e '.[corpus,cluster]'
 python scripts/stream_av2.py --split train --all --save-slice-map --output data/av2-train
 python scripts/fit_av2_exemplars.py data/av2-train data/av2-model --clusters 128 --passes 2
 cargo run --release --manifest-path native/Cargo.toml -- --pack data/av2-train data/av2-model/model.json data/av2-corpus
+python scripts/check_av2_corpus.py data/av2-corpus
 ```
 
 For a bounded trial, replace `--all` with `--limit-scenarios 1000` and reduce `--clusters` if necessary. Extraction writes `positions.f32`, `features.f32`, `index.csv`, `store.json`, and `source.json`; it never materializes a whole raw AV2 archive. The fit memory maps all eligible windows, makes bounded feature passes, and chooses an **observed** member nearest each center. Packing assigns each window to those observed exemplars and writes independent, cacheable position and action shards. The feature store can be discarded after verification and publication. Each extracted path uses about 880 bytes for positions and 1,100 bytes for features, plus metadata and staging overhead. Plan for S3 transfer, CPU time, and disk space on a worker near `us-east-1` for the full split.
 
-The deployment workflow executes the **complete AV2 training-split ego extraction**, fits 128 observed exemplars, packs all eligible windows, and publishes them on GitHub Pages. The app displays the actual scenario and fit counts from the run. For larger non-ego corpora, publish the packed directory to an object store/CDN and configure `VITE_CORPUS_BASE_URL` at build time; allow the Pages origin with CORS and publish the manifest only after its referenced shards and exemplar files are available. GitHub Pages has a 1 GB published-site limit, so check the packed size before using it for expanded actor scopes.
+The checked-in corpus at `web/public/corpus` comes from the complete AV2 training-split ego extraction in [Pages run 46116610225](https://github.com/BenGravell/trajalyzer/actions/runs/46116610225). It contains 80,593 eligible windows across 768 position and action shard pairs, with 128 observed exemplars. Pages validates and publishes that directory without contacting AV2. To refresh it, run the full commands above into a fresh output directory, then replace the checked-in corpus directory with the validated output and commit the changes together.
+
+For larger non-ego corpora, publish the packed directory to an object store/CDN and configure `VITE_CORPUS_BASE_URL` at build time. Allow the Pages origin with CORS and publish the manifest after its referenced shards and exemplar files are available. GitHub Pages has a 1 GB published-site limit, so check the packed size before using it for expanded actor scopes.
 
 `index.csv` records scenario, track and start time. `--save-slice-map` retains the maintainers' [scenario-to-source-slice mapping](https://argoverse.s3.amazonaws.com/datasets/av2/motion-forecasting/av2_mf_train_scenario_to_slice.csv). Group source slices for train/test evaluation when possible. That map does not identify complete acquisition logs, so it does not prove log-independent validation. `--start-after` can partition S3 keys into distinct extraction jobs, but the current fitter accepts one store; combine stores with a validated merger or process the full split as one stream before claiming a full-data fit.
 

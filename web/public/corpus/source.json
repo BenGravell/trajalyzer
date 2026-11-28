@@ -1,0 +1,18 @@
+{
+  "dataset": "Argoverse 2 Motion Forecasting",
+  "split": "train",
+  "track_scope": "av",
+  "scenarios": 199908,
+  "complete_split": true,
+  "cities": {
+    "austin": 42279,
+    "miami": 53932,
+    "pittsburgh": 42652,
+    "palo-alto": 11777,
+    "washington-dc": 25248,
+    "dearborn": 24020
+  },
+  "source": "https://argoverse.s3.amazonaws.com/datasets/av2/motion-forecasting/",
+  "license": "CC BY-NC-SA 4.0",
+  "attribution": "\u00a9 2021 Argo AI, LLC"
+}
