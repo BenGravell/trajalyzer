@@ -4,6 +4,7 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   base: './',
+  publicDir: '../data/published',
   plugins: [react(), wasm()],
   build: { target: 'esnext' },
 });

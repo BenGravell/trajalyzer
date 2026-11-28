@@ -39,7 +39,7 @@ jobs:
       - run: cargo fmt --manifest-path native/Cargo.toml
       - run: cargo clippy --manifest-path native/Cargo.toml --all-targets
       - run: cargo test --manifest-path native/Cargo.toml
-      - run: python scripts/check_av2_corpus.py web/public/corpus
+      - run: python scripts/check_av2_corpus.py data/published/corpus
       - run: ./scripts/check.sh
       - uses: actions/configure-pages@v5
         with:

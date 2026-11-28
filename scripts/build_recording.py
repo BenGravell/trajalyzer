@@ -75,7 +75,8 @@ def main():
         "positive": lateral > 3,
         "negative": lateral < -3,
     }
-    output_dir = root / "web" / "public"
+    output_dir = root / "data" / "published"
+    output_dir.mkdir(parents=True, exist_ok=True)
     _, actions, valid = infer_kinematics(sample, sample_rate=10, min_speed=MIN_SPEED_MPS)
     (output_dir / "actions.bin").write_bytes(actions.astype("<f4").tobytes())
     (output_dir / "clusters.bin").write_bytes(cluster_ids.astype("u1").tobytes())
