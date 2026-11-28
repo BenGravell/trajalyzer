@@ -10,9 +10,10 @@ import argparse
 import csv
 import io
 import json
-import shutil
 import subprocess
 import sys
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -39,6 +40,27 @@ COLUMNS = [
 ]
 
 
+def read_public(url, *, timeout=60):
+    """Retry transient S3/network failures during a long corpus extraction."""
+    request = urllib.request.Request(url, headers={"User-Agent": "trajalyzer/0.3"})
+    for attempt in range(6):
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return response.read()
+        except OSError as error:
+            if isinstance(error, urllib.error.HTTPError) and error.code not in (
+                429,
+                500,
+                502,
+                503,
+                504,
+            ):
+                raise
+            if attempt == 5:
+                raise
+            time.sleep(min(2**attempt, 16))
+
+
 def scenario_keys(split, *, limit=None, start_after=None):
     """List source Parquet objects with S3 continuation; no AWS account needed."""
     prefix = f"{PREFIX}{split}/"
@@ -50,11 +72,7 @@ def scenario_keys(split, *, limit=None, start_after=None):
             query["continuation-token"] = token
         if start_after and not token:
             query["start-after"] = start_after
-        request = urllib.request.Request(
-            BUCKET + "?" + urllib.parse.urlencode(query), headers={"User-Agent": "trajalyzer/0.2"}
-        )
-        with urllib.request.urlopen(request, timeout=60) as response:
-            tree = ET.fromstring(response.read())
+        tree = ET.fromstring(read_public(BUCKET + "?" + urllib.parse.urlencode(query)))
         for item in tree.findall("{*}Contents"):
             key = item.findtext("{*}Key")
             if key and Path(key).name.startswith("scenario_") and key.endswith(".parquet"):
@@ -70,9 +88,7 @@ def scenario_keys(split, *, limit=None, start_after=None):
 
 
 def fetch_scenario(key, tracks):
-    request = urllib.request.Request(BUCKET + key, headers={"User-Agent": "trajalyzer/0.2"})
-    with urllib.request.urlopen(request, timeout=60) as response:
-        payload = response.read()
+    payload = read_public(BUCKET + key)
     table = pq.read_table(pa.BufferReader(payload), columns=COLUMNS)
     rows = table.to_pydict()
     scenario_id = rows["scenario_id"][0]
@@ -135,7 +151,7 @@ def stream_scenarios(keys, *, tracks, workers, writer):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--split", choices=("train", "val", "test"), default="train")
-    parser.add_argument("--tracks", choices=("av", "vehicles"), default="vehicles")
+    parser.add_argument("--tracks", choices=("av", "vehicles"), default="av")
     parser.add_argument("--limit-scenarios", type=int, default=1000)
     parser.add_argument("--all", action="store_true", help="Process the entire selected split")
     parser.add_argument("--start-after", help="Resume listing after an exact S3 object key")
@@ -181,11 +197,8 @@ def main():
     args.output.mkdir(parents=True, exist_ok=True)
     if args.save_slice_map:
         mapping = BUCKET + PREFIX + "av2_mf_train_scenario_to_slice.csv"
-        with (
-            urllib.request.urlopen(mapping, timeout=120) as source,
-            (args.output / "av2_mf_train_scenario_to_slice.csv").open("wb") as destination,
-        ):
-            shutil.copyfileobj(source, destination)
+        with ((args.output / "av2_mf_train_scenario_to_slice.csv").open("wb") as destination,):
+            destination.write(read_public(mapping, timeout=120))
     (args.output / "source.json").write_text(
         json.dumps(
             {
@@ -193,6 +206,7 @@ def main():
                 "split": args.split,
                 "track_scope": args.tracks,
                 "scenarios": count,
+                "complete_split": args.all and args.start_after is None,
                 "cities": cities,
                 "source": BUCKET + PREFIX,
                 "license": "CC BY-NC-SA 4.0",

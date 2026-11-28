@@ -246,8 +246,10 @@ export default function CorpusExplorer({ onDiagnostics }) {
             <p className="eyebrow">CORPUS</p>
             <h2>{manifest?.count.toLocaleString() ?? '—'} windows</h2>
             <p>
-              {source?.dataset ?? 'INTERACTION'} · {manifest?.frames ?? 50} samples at 10 Hz. Only a
-              bounded working set enters the browser.
+              {source?.dataset ?? 'INTERACTION'} ·{' '}
+              {source?.track_scope === 'av' ? 'AV ego' : 'vehicle'} tracks ·{' '}
+              {manifest?.frames ?? 50} samples at 10 Hz. Only a bounded working set enters the
+              browser.
             </p>
           </section>
           <section className="metric-row">
@@ -382,7 +384,7 @@ export default function CorpusExplorer({ onDiagnostics }) {
           <>
             AV2 data © 2021 Argo AI, LLC ·{' '}
             <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/">CC BY-NC-SA 4.0</a> ·{' '}
-            {source.scenarios < 250000 ? 'Preview · ' : ''}
+            {!source.complete_split ? 'Preview · ' : 'Complete training split · '}
             {source.scenarios} source scenarios · {model?.info.training_windows ?? '—'} windows used
             for exemplar fitting.
           </>

@@ -1,8 +1,8 @@
 # Trajalyzer
 
-Interactive exploration of observed vehicle trajectories. The primary indexed corpus uses [Argoverse 2 Motion Forecasting](https://www.argoverse.org/av2.html) (AV2) at its native **11 seconds, 10 Hz, 110 positions**. Complete, moving AV and vehicle/bus tracks are translated and rotated into each vehicle's starting frame. Acceleration and curvature are inferred from the planar trajectory using differential flatness and plotted against the synchronized playback cursor. A separate, earlier Rerun diagnostic view still uses a 5-second, 50-frame [INTERACTION](https://huggingface.co/datasets/INTERACTION-dataset/INTERACTION-dataset) sample.
+Interactive exploration of observed vehicle trajectories. The primary indexed corpus uses [Argoverse 2 Motion Forecasting](https://www.argoverse.org/av2.html) (AV2) at its native **11 seconds, 10 Hz, 110 positions**. By default, complete, moving autonomous vehicle (AV) ego tracks are translated and rotated into their starting frame. Non-ego vehicle and bus tracks remain available with `--tracks vehicles`. Acceleration and curvature are inferred from the planar trajectory using differential flatness and plotted against the synchronized playback cursor. A separate, earlier Rerun diagnostic view still uses a 5-second, 50-frame [INTERACTION](https://huggingface.co/datasets/INTERACTION-dataset/INTERACTION-dataset) sample.
 
-The browser requests bounded position shards and only fetches a selected shard's action data when needed. It shows at most 768 paths at once while paging through the full indexed corpus. The representative colored paths are **observed exemplars**, selected nearest to MiniBatchKMeans centers in the feature space. The deployed AV2 sample uses 100 scenarios and 16 preview exemplars. It is labeled as a preview; its clusters do not claim to represent all AV2 driving behavior.
+The browser requests bounded position shards and only fetches a selected shard's action data when needed. It shows at most 768 paths at once while paging through the full indexed corpus. The representative colored paths are **observed exemplars**, selected nearest to MiniBatchKMeans centers in the feature space. The Pages workflow fits exemplars over the complete AV2 training split and publishes the resulting ego corpus. The app records the actual number of eligible windows and source scenarios.
 
 ## Run locally
 
@@ -15,12 +15,12 @@ pre-commit install --hook-type pre-commit --hook-type pre-push
 npm --prefix web run dev
 ```
 
-`./scripts/check.sh` runs Ruff, Black, Python tests, ESLint, Prettier, and the Vite build. The Pages workflow additionally runs Rust format, Clippy, tests, and the AV2 preview build before deployment. The committed `web/public` Rerun recordings and diagnostic binaries are from the INTERACTION sample; `python scripts/build_recording.py` regenerates those if needed. `python scripts/build_corpus.py` remains a small 50-frame protocol fixture against those binaries.
+`./scripts/check.sh` runs Ruff, Black, Python tests, ESLint, Prettier, and the Vite build. The Pages workflow additionally runs Rust format, Clippy, tests, and the complete AV2 training-split build before deployment. The committed `web/public` Rerun recordings and diagnostic binaries are from the INTERACTION sample; `python scripts/build_recording.py` regenerates those if needed. `python scripts/build_corpus.py` remains a small 50-frame protocol fixture against those binaries.
 
 ## AV2 pipeline
 
 ```bash
-python scripts/stream_av2.py --split train --tracks vehicles --limit-scenarios 1000 --output data/av2-sample
+python scripts/stream_av2.py --split train --limit-scenarios 1000 --output data/av2-sample
 python scripts/fit_av2_exemplars.py data/av2-sample data/av2-model --clusters 64
 cargo run --release --manifest-path native/Cargo.toml -- --pack data/av2-sample data/av2-model/model.json data/av2-corpus
 ```
@@ -31,6 +31,6 @@ Kinematic state is `(x, y, yaw, speed)` and the inferred action is `(acceleratio
 
 ## Publish a full-data corpus
 
-The [AV2 guide](docs/data_sources.md) gives the full training-split extraction and exemplar commands. Publish the packed directory to an object store/CDN and set the repository Actions variable `VITE_CORPUS_BASE_URL` to its public trailing-slash URL. Configure CORS for the Pages origin. GitHub Pages hosts the app and a small preview at <https://bengravell.github.io/trajalyzer/>; millions of trajectories and their shards belong on scalable storage. An analytical Parquet mirror can be generated with `python scripts/export_parquet.py /path/to/corpus /path/to/parquet` and read with Polars or Arrow scanners.
+The [AV2 guide](docs/data_sources.md) gives the full training-split extraction and exemplar commands. The Pages workflow builds and publishes the full eligible AV ego corpus at <https://bengravell.github.io/trajalyzer/>. The optional `--tracks vehicles` scope retains non-ego vehicle and bus actors for later experiments. For a larger corpus, publish the packed directory to an object store/CDN and set `VITE_CORPUS_BASE_URL` to its public trailing-slash URL when building the app. Configure CORS for the Pages origin. An analytical Parquet mirror can be generated with `python scripts/export_parquet.py /path/to/corpus /path/to/parquet` and read with Polars or Arrow scanners.
 
-AV2 is CC BY-NC-SA 4.0, attributed `© 2021 Argo AI, LLC`. The separately labeled INTERACTION diagnostic sample is CC BY 4.0. The current pilot does **not** establish that the full AV2 split has a million eligible full-length moving tracks, and the full-data fit has not yet run.
+AV2 is CC BY-NC-SA 4.0, attributed `© 2021 Argo AI, LLC`. The separately labeled INTERACTION diagnostic sample is CC BY 4.0. The full-data run reports its actual eligibility count; no million-window threshold is assumed.
