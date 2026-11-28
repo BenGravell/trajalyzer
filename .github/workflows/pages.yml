@@ -40,9 +40,17 @@ jobs:
       - run: cargo clippy --manifest-path native/Cargo.toml --all-targets
       - run: cargo test --manifest-path native/Cargo.toml
       - run: python -m pip install -e '.[corpus]'
-      - run: python scripts/stream_av2.py --split train --tracks av --all --workers 16 --save-slice-map --output data/av2-train
-      - run: python scripts/fit_av2_exemplars.py data/av2-train data/av2-model --clusters 128 --passes 2
-      - run: cargo run --release --manifest-path native/Cargo.toml -- --pack data/av2-train data/av2-model/model.json web/public/corpus
+      - uses: actions/cache@v4
+        id: corpus-cache
+        with:
+          path: web/public/corpus
+          key: av2-ego-v2-${{ hashFiles('native/src/**', 'scripts/stream_av2.py', 'scripts/fit_av2_exemplars.py', 'pyproject.toml') }}
+      - if: steps.corpus-cache.outputs.cache-hit != 'true'
+        run: python scripts/stream_av2.py --split train --tracks av --all --workers 16 --save-slice-map --output data/av2-train
+      - if: steps.corpus-cache.outputs.cache-hit != 'true'
+        run: python scripts/fit_av2_exemplars.py data/av2-train data/av2-model --clusters 128 --passes 2
+      - if: steps.corpus-cache.outputs.cache-hit != 'true'
+        run: cargo run --release --manifest-path native/Cargo.toml -- --pack data/av2-train data/av2-model/model.json web/public/corpus
       - run: du -sh web/public/corpus && cat web/public/corpus/model-meta.json && cat web/public/corpus/source.json
       - run: ./scripts/check.sh
       - uses: actions/configure-pages@v5

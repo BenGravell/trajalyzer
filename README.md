@@ -2,7 +2,7 @@
 
 Interactive exploration of observed vehicle trajectories. The primary indexed corpus uses [Argoverse 2 Motion Forecasting](https://www.argoverse.org/av2.html) (AV2) at its native **11 seconds, 10 Hz, 110 positions**. By default, complete, moving autonomous vehicle (AV) ego tracks are translated and rotated into their starting frame. Non-ego vehicle and bus tracks remain available with `--tracks vehicles`. Acceleration and curvature are inferred from the planar trajectory using differential flatness and plotted against the synchronized playback cursor. A separate, earlier Rerun diagnostic view still uses a 5-second, 50-frame [INTERACTION](https://huggingface.co/datasets/INTERACTION-dataset/INTERACTION-dataset) sample.
 
-The browser requests bounded position shards and only fetches a selected shard's action data when needed. It shows at most 768 paths at once while paging through the full indexed corpus. The representative colored paths are **observed exemplars**, selected nearest to MiniBatchKMeans centers in the feature space. The Pages workflow fits exemplars over the complete AV2 training split and publishes the resulting ego corpus. The app records the actual number of eligible windows and source scenarios.
+The browser requests bounded position and action shards for the current page. It shows at most 768 paths at once while paging through the full indexed corpus. Acceleration and curvature plots overlay every visible path, color them by exemplar, and emphasize the selected path. Group, exemplar, and selected-only controls drive both trajectories and plots. The representative colored paths are **observed exemplars**, selected nearest to MiniBatchKMeans centers in the feature space. The Pages workflow fits exemplars over the complete AV2 training split and publishes the resulting ego corpus. The app records the actual number of eligible windows and source scenarios.
 
 ## Run locally
 
@@ -15,7 +15,7 @@ pre-commit install --hook-type pre-commit --hook-type pre-push
 npm --prefix web run dev
 ```
 
-`./scripts/check.sh` runs Ruff, Black, Python tests, ESLint, Prettier, and the Vite build. The Pages workflow additionally runs Rust format, Clippy, tests, and the complete AV2 training-split build before deployment. The committed `web/public` Rerun recordings and diagnostic binaries are from the INTERACTION sample; `python scripts/build_recording.py` regenerates those if needed. `python scripts/build_corpus.py` remains a small 50-frame protocol fixture against those binaries.
+`./scripts/check.sh` runs Ruff, Black, Python tests, ESLint, Prettier, and the Vite build. The Pages workflow additionally runs Rust format, Clippy, tests, and the complete AV2 training-split build before deployment; it caches the packed corpus across frontend-only updates. The committed `web/public` Rerun recordings and diagnostic binaries are from the INTERACTION sample; `python scripts/build_recording.py` regenerates those if needed. `python scripts/build_corpus.py` remains a small 50-frame protocol fixture against those binaries.
 
 ## AV2 pipeline
 

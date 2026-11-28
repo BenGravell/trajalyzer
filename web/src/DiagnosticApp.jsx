@@ -13,6 +13,11 @@ const cohorts = [
   { value: 'positive', label: 'Positive lateral', detail: 'Final lateral displacement above +3 m' },
   { value: 'negative', label: 'Negative lateral', detail: 'Final lateral displacement below −3 m' },
 ];
+const visibilityOptions = [
+  { value: 'all', label: 'All paths in group' },
+  { value: 'exemplar', label: 'Selected exemplar group' },
+  { value: 'selected', label: 'Selected path only' },
+];
 const url = (name) => new URL(`${import.meta.env.BASE_URL}${name}.rrd`, document.baseURI).href;
 const hasWebGL2 = () => {
   try {
@@ -25,9 +30,11 @@ const hasWebGL2 = () => {
 function DiagnosticApp({ onCorpus }) {
   const host = useRef(null),
     viewer = useRef(null),
-    recordingId = useRef(null);
+    recordingId = useRef(null),
+    timeRef = useRef(0);
   const [cohort, setCohort] = useState('all'),
     [summary, setSummary] = useState(null);
+  const [visibility, setVisibility] = useState('all');
   const [ready, setReady] = useState(false),
     [error, setError] = useState('');
   const [playing, setPlaying] = useState(false),
@@ -37,8 +44,13 @@ function DiagnosticApp({ onCorpus }) {
   const [mode, setMode] = useState(hasWebGL2() ? 'rerun' : 'canvas'),
     [paths, setPaths] = useState(null);
   const [actions, setActions] = useState(null),
-    [selectedLocal, setSelectedLocal] = useState(2);
+    [selectedSample, setSelectedSample] = useState(2);
   const [clusters, setClusters] = useState(null);
+  const showRerun = mode === 'rerun' && visibility === 'all';
+
+  useEffect(() => {
+    timeRef.current = time;
+  }, [time]);
 
   useEffect(() => {
     fetch(url('cohorts').replace('.rrd', '.json'))
@@ -125,11 +137,11 @@ function DiagnosticApp({ onCorpus }) {
   }, []);
 
   useEffect(() => {
-    if (mode === 'canvas') setReady(!!paths);
-  }, [mode, paths, cohort]);
+    if (!showRerun) setReady(!!paths);
+  }, [showRerun, paths, cohort]);
 
   useEffect(() => {
-    if (mode !== 'canvas' || !playing) return;
+    if (showRerun || !playing) return;
     const timer = setInterval(
       () =>
         setTime((t) => {
@@ -142,10 +154,10 @@ function DiagnosticApp({ onCorpus }) {
       100,
     );
     return () => clearInterval(timer);
-  }, [mode, playing]);
+  }, [showRerun, playing]);
 
   useEffect(() => {
-    if (mode !== 'rerun') return;
+    if (!showRerun || !paths) return;
     let disposed = false;
     const instance = new WebViewer();
     viewer.current = instance;
@@ -153,13 +165,30 @@ function DiagnosticApp({ onCorpus }) {
     setReady(false);
     setError('');
     setPlaying(false);
-    setTime(0);
     setSelection('Tap a path or position to inspect it.');
+    const recordingIndices = paths
+      ?.map((path, i) => ({ path, i }))
+      .filter(
+        ({ path }) =>
+          cohort === 'all' ||
+          (cohort === 'center'
+            ? Math.abs(path[49][1]) <= 3
+            : cohort === 'positive'
+              ? path[49][1] > 3
+              : path[49][1] < -3),
+      )
+      .map(({ i }) => i);
     const remove = [
       instance.on('recording_open', (e) => {
         if (disposed) return;
         recordingId.current = e.recording_id;
         instance.set_active_timeline(e.recording_id, 'elapsed');
+        instance.set_current_time(
+          e.recording_id,
+          'elapsed',
+          Math.round(timeRef.current * 100_000_000),
+        );
+        instance.override_panel_state('blueprint', 'hidden');
         setReady(true);
       }),
       instance.on('time_update', (e) => {
@@ -179,7 +208,8 @@ function DiagnosticApp({ onCorpus }) {
             Number.isInteger(x.instance_id) &&
             x.entity_path?.includes('trajectories/'),
         );
-        if (item && item.instance_id >= 0) setSelectedLocal(item.instance_id);
+        if (item && recordingIndices?.[item.instance_id] != null)
+          setSelectedSample(recordingIndices[item.instance_id]);
       }),
     ];
     instance.start(url(cohort), host.current, null).catch(() => {
@@ -192,9 +222,10 @@ function DiagnosticApp({ onCorpus }) {
       disposed = true;
       remove.forEach((fn) => fn());
       instance.stop();
+      recordingId.current = null;
       if (viewer.current === instance) viewer.current = null;
     };
-  }, [cohort, mode]);
+  }, [cohort, showRerun, paths]);
 
   const seek = (value) => {
     setTime(value);
@@ -206,14 +237,14 @@ function DiagnosticApp({ onCorpus }) {
       );
   };
   const toggle = () => {
-    if (mode === 'rerun') {
+    if (showRerun) {
       if (!recordingId.current) return;
       viewer.current?.set_playing(recordingId.current, !playing);
     } else if (time >= 49) setTime(0);
     setPlaying(!playing);
   };
   const active = cohorts.find((x) => x.value === cohort);
-  const visibleIndices = useMemo(
+  const cohortIndices = useMemo(
     () =>
       paths
         ?.map((path, i) => ({ path, i }))
@@ -229,19 +260,52 @@ function DiagnosticApp({ onCorpus }) {
         .map(({ i }) => i),
     [paths, cohort],
   );
+  const selectedCluster = clusters?.ids[selectedSample];
+  const visibleIndices = useMemo(
+    () =>
+      cohortIndices?.filter(
+        (i) =>
+          visibility === 'all' ||
+          (visibility === 'selected' ? i === selectedSample : clusters?.ids[i] === selectedCluster),
+      ),
+    [cohortIndices, visibility, selectedSample, selectedCluster, clusters],
+  );
   const visiblePaths = useMemo(() => visibleIndices?.map((i) => paths[i]), [visibleIndices, paths]);
   const visibleLabels = useMemo(
     () => visibleIndices?.map((i) => clusters?.ids[i]),
     [visibleIndices, clusters],
   );
-  const localIndex = Math.min(selectedLocal, Math.max(0, (visibleIndices?.length ?? 1) - 1));
-  const sampleIndex = visibleIndices?.[localIndex] ?? 0;
-  const chosenActions = actions?.[sampleIndex];
+  const localIndex = Math.max(0, visibleIndices?.indexOf(selectedSample) ?? 0);
+  const sampleIndex = selectedSample;
+  const traces = useMemo(
+    () =>
+      visibleIndices?.flatMap((i) =>
+        actions?.[i]
+          ? [
+              {
+                id: i,
+                values: actions[i],
+                color: clusters?.info.palette[clusters.ids[i]] ?? '#84baff',
+              },
+            ]
+          : [],
+      ) ?? [],
+    [visibleIndices, actions, clusters],
+  );
   const clusterId = clusters?.ids[sampleIndex];
   const changeCohort = (value) => {
     if (value) {
       setCohort(value);
-      setSelectedLocal(0);
+      const first = paths?.findIndex(
+        (path) =>
+          value === 'all' ||
+          (value === 'center'
+            ? Math.abs(path[49][1]) <= 3
+            : value === 'positive'
+              ? path[49][1] > 3
+              : path[49][1] < -3),
+      );
+      if (first >= 0) setSelectedSample(first);
       setSelection('Choose a path or tap one in the view.');
     }
   };
@@ -276,7 +340,7 @@ function DiagnosticApp({ onCorpus }) {
               <small>valid windows loaded</small>
             </article>
             <article>
-              <strong>{summary?.counts?.[cohort] ?? '—'}</strong>
+              <strong>{visibleIndices?.length ?? '—'}</strong>
               <small>paths in view</small>
             </article>
           </section>
@@ -289,6 +353,16 @@ function DiagnosticApp({ onCorpus }) {
               onChange={changeCohort}
               presentation="adaptive"
             />
+            <Selector
+              label="Show trajectories"
+              value={visibility}
+              options={visibilityOptions}
+              onChange={(value) => {
+                setVisibility(value || 'all');
+                setPlaying(false);
+              }}
+              presentation="adaptive"
+            />
             <p className="supporting">
               {active.detail}. This threshold is descriptive, not a maneuver label.
             </p>
@@ -298,7 +372,7 @@ function DiagnosticApp({ onCorpus }) {
               min={1}
               max={visibleIndices?.length ?? 1}
               step={1}
-              onChange={(value) => setSelectedLocal(value - 1)}
+              onChange={(value) => setSelectedSample(visibleIndices[value - 1])}
               formatValue={(value) => `${value} / ${visibleIndices?.length ?? '—'}`}
               valueDisplay="text"
               isDisabled={!visibleIndices?.length}
@@ -324,7 +398,7 @@ function DiagnosticApp({ onCorpus }) {
               isDisabled={!ready}
             />
             <p className="supporting">
-              Use this control{mode === 'rerun' ? ' or Rerun’s timeline' : ''} to scrub through 50
+              Use this control{showRerun ? ' or Rerun’s timeline' : ''} to scrub through 50
               positions.
             </p>
           </section>
@@ -346,18 +420,18 @@ function DiagnosticApp({ onCorpus }) {
             </p>
             <p className="supporting">{selection}</p>
             <p className="supporting">
-              {mode === 'rerun'
+              {showRerun
                 ? 'Select a path in Rerun or use the path slider.'
-                : 'Drag and zoom the canvas. Tap a point or use the path slider.'}
+                : 'Drag and zoom the canvas. Tap a point or use the path slider. Focused visibility uses the canvas view.'}
             </p>
           </section>
         </aside>
         <section className="viewer-pane" aria-label="Trajectory visualization">
           <header className="viewer-heading">
             <strong>{active.label}</strong>
-            <small>{summary?.counts?.[cohort] ?? '—'} paths · metres · 0–4.9 seconds</small>
+            <small>{visibleIndices?.length ?? '—'} visible paths · metres · 0–4.9 seconds</small>
           </header>
-          {mode === 'rerun' ? (
+          {showRerun ? (
             <section className="viewer-host" ref={host} />
           ) : (
             <FallbackViewer
@@ -368,12 +442,12 @@ function DiagnosticApp({ onCorpus }) {
               palette={clusters?.info.palette}
               exemplarPath={clusters?.exemplars[clusterId]}
               onSelect={(index, detail) => {
-                setSelectedLocal(index);
+                setSelectedSample(visibleIndices[index]);
                 setSelection(detail);
               }}
             />
           )}
-          <ActionPlots series={chosenActions} time={time} onSeek={seek} sampleIndex={sampleIndex} />
+          <ActionPlots trajectories={traces} selectedId={sampleIndex} time={time} onSeek={seek} />
           {error && (
             <p className="error" role="alert">
               {error}

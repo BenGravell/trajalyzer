@@ -217,14 +217,24 @@ body {
   font-variant-numeric: tabular-nums;
   color: var(--color-text-secondary);
 }
-.action-plot svg {
-  display: block;
-  width: 100%;
+.plot-surface {
+  position: relative;
   height: 8rem;
-  touch-action: none;
-  cursor: crosshair;
   background: #111b29;
   border-radius: 0.35rem;
+  overflow: hidden;
+}
+.plot-surface canvas,
+.plot-surface svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.plot-surface svg {
+  position: absolute;
+  inset: 0;
+  touch-action: none;
+  cursor: crosshair;
 }
 .action-plot svg text {
   fill: #8da3b6;

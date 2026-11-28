@@ -17,6 +17,11 @@ const groups = [
 ];
 const MAX_SHARDS = 6;
 const MAX_VISIBLE = 768;
+const visibilityOptions = [
+  { value: 'all', label: 'All loaded paths' },
+  { value: 'exemplar', label: 'Selected exemplar group' },
+  { value: 'selected', label: 'Selected path only' },
+];
 
 function selectShards(manifest, cohort, cluster, page) {
   const eligible = manifest.shards.filter(
@@ -80,12 +85,13 @@ export default function CorpusExplorer({ onDiagnostics }) {
   const [model, setModel] = useState(null);
   const [cohort, setCohort] = useState('all');
   const [cluster, setCluster] = useState('all');
+  const [visibility, setVisibility] = useState('all');
   const [page, setPage] = useState(0);
   const [rows, setRows] = useState([]);
   const [selected, setSelected] = useState(0);
   const [time, setTime] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const [series, setSeries] = useState(null);
+  const [actionBuffers, setActionBuffers] = useState(new Map());
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const actionCache = useRef(new Map());
@@ -157,47 +163,41 @@ export default function CorpusExplorer({ onDiagnostics }) {
       });
     return () => controller.abort();
   }, [selection, manifest]);
-  const chosen = rows[selected];
   useEffect(() => {
-    if (!chosen) {
-      setSeries(null);
+    if (!rows.length) {
+      setActionBuffers(new Map());
       return;
     }
-    const key = chosen.shard.path;
-    const cached = actionCache.current.get(key);
     const controller = new AbortController();
-    const load = cached
-      ? Promise.resolve(cached)
-      : fetch(new URL(key.replace(/\.bin$/, '.actions.bin'), base), { signal: controller.signal })
-          .then((r) => {
-            if (!r.ok) throw Error('Action shard unavailable');
-            return r.arrayBuffer();
-          })
-          .then((buffer) => {
-            if (buffer.byteLength !== chosen.shard.count * manifest.frames * 8)
-              throw Error('Invalid action shard');
-            actionCache.current.set(key, buffer);
-            if (actionCache.current.size > 8)
-              actionCache.current.delete(actionCache.current.keys().next().value);
-            return buffer;
+    const shards = [...new Map(rows.map((row) => [row.shard.path, row.shard])).values()];
+    setActionBuffers(new Map());
+    Promise.all(
+      shards.map(async (shard) => {
+        const key = shard.path;
+        let buffer = actionCache.current.get(key);
+        if (!buffer) {
+          const response = await fetch(new URL(key.replace(/\.bin$/, '.actions.bin'), base), {
+            signal: controller.signal,
           });
-    setSeries(null);
-    load
-      .then((buffer) => {
-        if (controller.signal.aborted) return;
-        const view = new DataView(buffer);
-        setSeries(
-          Array.from({ length: manifest.frames }, (_, t) => [
-            view.getFloat32(chosen.index * manifest.frames * 8 + t * 8, true),
-            view.getFloat32(chosen.index * manifest.frames * 8 + t * 8 + 4, true),
-          ]),
-        );
+          if (!response.ok) throw Error(`Action shard unavailable: ${key}`);
+          buffer = await response.arrayBuffer();
+          if (buffer.byteLength !== shard.count * manifest.frames * 8)
+            throw Error(`Invalid action shard: ${key}`);
+          actionCache.current.set(key, buffer);
+          if (actionCache.current.size > 8)
+            actionCache.current.delete(actionCache.current.keys().next().value);
+        }
+        return [key, new DataView(buffer)];
+      }),
+    )
+      .then((entries) => {
+        if (!controller.signal.aborted) setActionBuffers(new Map(entries));
       })
       .catch((e) => {
         if (e.name !== 'AbortError') setError(e.message);
       });
     return () => controller.abort();
-  }, [chosen, manifest]);
+  }, [rows, manifest]);
   useEffect(() => {
     if (!playing) return;
     const timer = setInterval(
@@ -226,8 +226,36 @@ export default function CorpusExplorer({ onDiagnostics }) {
       ),
     [clusters],
   );
-  const paths = useMemo(() => rows.map((r) => r.path), [rows]);
-  const labels = useMemo(() => rows.map((r) => r.cluster), [rows]);
+  const chosen = rows[selected];
+  const visibleRows = useMemo(
+    () =>
+      rows.filter(
+        (row) =>
+          visibility === 'all' ||
+          (visibility === 'selected' ? row === chosen : row.cluster === chosen?.cluster),
+      ),
+    [rows, visibility, chosen],
+  );
+  const paths = useMemo(() => visibleRows.map((row) => row.path), [visibleRows]);
+  const labels = useMemo(() => visibleRows.map((row) => row.cluster), [visibleRows]);
+  const traces = useMemo(
+    () =>
+      visibleRows.flatMap((row) => {
+        const view = actionBuffers.get(row.shard.path);
+        if (!view) return [];
+        return [
+          {
+            id: row.id,
+            color: palette[row.cluster],
+            values: Array.from({ length: manifest.frames }, (_, t) => [
+              view.getFloat32(row.index * manifest.frames * 8 + t * 8, true),
+              view.getFloat32(row.index * manifest.frames * 8 + t * 8 + 4, true),
+            ]),
+          },
+        ];
+      }),
+    [visibleRows, actionBuffers, manifest, palette],
+  );
   return (
     <article className="app">
       <header className="masthead">
@@ -285,6 +313,13 @@ export default function CorpusExplorer({ onDiagnostics }) {
                 setPage(0);
                 setCluster(value || 'all');
               }}
+              presentation="adaptive"
+            />
+            <Selector
+              label="Show trajectories"
+              value={visibility}
+              options={visibilityOptions}
+              onChange={(value) => setVisibility(value || 'all')}
               presentation="adaptive"
             />
             <Slider
@@ -352,24 +387,25 @@ export default function CorpusExplorer({ onDiagnostics }) {
           <header className="viewer-heading">
             <strong>Corpus overview</strong>
             <small>
-              {rows.length} displayed / {selection?.count.toLocaleString() ?? '—'} matching · 0–
+              {visibleRows.length} visible / {selection?.count.toLocaleString() ?? '—'} matching ·
+              0–
               {(((manifest?.frames ?? 50) - 1) / 10).toFixed(1)} s
             </small>
           </header>
           <FallbackViewer
             paths={paths}
             time={time}
-            selectedIndex={selected}
+            selectedIndex={visibleRows.indexOf(chosen)}
             labels={labels}
             palette={palette}
             exemplarPath={model?.paths[chosen?.cluster]}
-            onSelect={(index) => setSelected(index)}
+            onSelect={(index) => setSelected(rows.indexOf(visibleRows[index]))}
           />
           <ActionPlots
-            series={series}
+            trajectories={traces}
+            selectedId={chosen?.id}
             time={time}
             onSeek={setTime}
-            sampleIndex={chosen?.id ?? 0}
             frames={manifest?.frames ?? 50}
           />
           {error && (
