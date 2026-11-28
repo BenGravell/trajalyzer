@@ -19,8 +19,12 @@ def main():
     if args.rows_per_file < 1:
         parser.error("--rows-per-file must be positive")
     manifest = json.loads((args.corpus / "manifest.json").read_text())
-    if manifest["version"] != 1 or manifest["frames"] != 50:
+    if manifest["version"] not in (1, 2) or manifest["frames"] not in (50, 110):
         raise ValueError("Unsupported corpus format")
+    frames = manifest["frames"]
+    position_bytes = frames * 4
+    action_bytes = frames * 8
+    row_bytes = position_bytes + 8
     pending = defaultdict(list)
     parts = defaultdict(int)
 
@@ -33,7 +37,7 @@ def main():
         )
 
         def fixed(values):
-            return pa.FixedSizeListArray.from_arrays(pa.array(values.ravel()), 100)
+            return pa.FixedSizeListArray.from_arrays(pa.array(values.ravel()), frames * 2)
 
         table = pa.table(
             {
@@ -54,16 +58,18 @@ def main():
         n = shard["count"]
         payload = (args.corpus / shard["path"]).read_bytes()
         detail = (args.corpus / shard["path"].replace(".bin", ".actions.bin")).read_bytes()
-        if len(payload) != n * 208 or len(detail) != n * 400:
+        if len(payload) != n * row_bytes or len(detail) != n * action_bytes:
             raise ValueError(f"Invalid shard {shard['path']}")
-        data = np.frombuffer(payload, dtype=np.uint8).reshape(n, 208)
+        data = np.frombuffer(payload, dtype=np.uint8).reshape(n, row_bytes)
         positions = (
-            np.frombuffer(data[:, :200].copy(), dtype="<i2").reshape(n, 100).astype(np.float32)
-            / 100
+            np.frombuffer(data[:, :position_bytes].copy(), dtype="<i2")
+            .reshape(n, frames * 2)
+            .astype(np.float32)
+            * manifest["position_scale_m"]
         )
-        ids = np.frombuffer(data[:, 200:204].copy(), dtype="<u4")
-        distances = np.frombuffer(data[:, 204:208].copy(), dtype="<f4")
-        actions = np.frombuffer(detail, dtype="<f4").reshape(n, 100)
+        ids = np.frombuffer(data[:, position_bytes : position_bytes + 4].copy(), dtype="<u4")
+        distances = np.frombuffer(data[:, position_bytes + 4 : row_bytes].copy(), dtype="<f4")
+        actions = np.frombuffer(detail, dtype="<f4").reshape(n, frames * 2)
         key = (shard["cohort"], shard["cluster"])
         pending[key].append((ids, distances, positions, actions))
         if sum(len(batch[0]) for batch in pending[key]) >= args.rows_per_file:

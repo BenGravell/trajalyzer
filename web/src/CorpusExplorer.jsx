@@ -32,8 +32,10 @@ function selectShards(manifest, cohort, cluster, page) {
   return { count: eligible.reduce((sum, s) => sum + s.count, 0), chosen, pages };
 }
 
-async function fetchPaths(shards, signal) {
+async function fetchPaths(shards, frames, scale, signal) {
   const results = new Array(shards.length);
+  const positionBytes = frames * 4;
+  const rowBytes = positionBytes + 8;
   let cursor = 0;
   await Promise.all(
     Array.from({ length: Math.min(6, shards.length) }, async () => {
@@ -43,18 +45,19 @@ async function fetchPaths(shards, signal) {
         const response = await fetch(new URL(shard.path, base), { signal });
         if (!response.ok) throw Error(`Shard unavailable: ${shard.path}`);
         const buffer = await response.arrayBuffer();
-        if (buffer.byteLength !== shard.count * 208) throw Error(`Invalid shard: ${shard.path}`);
+        if (buffer.byteLength !== shard.count * rowBytes)
+          throw Error(`Invalid shard: ${shard.path}`);
         const view = new DataView(buffer);
         results[slot] = Array.from({ length: shard.count }, (_, index) => {
-          const offset = index * 208;
-          const path = Array.from({ length: 50 }, (_, t) => [
-            view.getInt16(offset + 4 * t, true) / 100,
-            view.getInt16(offset + 4 * t + 2, true) / 100,
+          const offset = index * rowBytes;
+          const path = Array.from({ length: frames }, (_, t) => [
+            view.getInt16(offset + 4 * t, true) * scale,
+            view.getInt16(offset + 4 * t + 2, true) * scale,
           ]);
           return {
             path,
-            id: view.getUint32(offset + 200, true),
-            distance: view.getFloat32(offset + 204, true),
+            id: view.getUint32(offset + positionBytes, true),
+            distance: view.getFloat32(offset + positionBytes + 4, true),
             cluster: shard.cluster,
             shard,
             index,
@@ -73,6 +76,8 @@ async function fetchPaths(shards, signal) {
 
 export default function CorpusExplorer({ onDiagnostics }) {
   const [manifest, setManifest] = useState(null);
+  const [source, setSource] = useState(null);
+  const [model, setModel] = useState(null);
   const [cohort, setCohort] = useState('all');
   const [cluster, setCluster] = useState('all');
   const [page, setPage] = useState(0);
@@ -93,8 +98,39 @@ export default function CorpusExplorer({ onDiagnostics }) {
         return r.json();
       })
       .then((data) => {
-        if (data.version !== 1 || data.frames !== 50) throw Error('Unsupported corpus format');
+        if (![1, 2].includes(data.version) || ![50, 110].includes(data.frames))
+          throw Error('Unsupported corpus format');
         setManifest(data);
+        if (data.version === 2) {
+          fetch(new URL('source.json', base), { signal: controller.signal })
+            .then((r) => (r.ok ? r.json() : null))
+            .then(setSource)
+            .catch(() => {});
+          Promise.all(
+            ['model-meta.json', 'exemplars.bin'].map((name) =>
+              fetch(new URL(name, base), { signal: controller.signal }).then((r) => {
+                if (!r.ok) throw Error('Exemplar assets unavailable');
+                return name.endsWith('.json') ? r.json() : r.arrayBuffer();
+              }),
+            ),
+          )
+            .then(([info, buffer]) => {
+              const raw = new Int16Array(buffer);
+              if (raw.length !== info.count * data.frames * 2) throw Error('Invalid exemplars');
+              setModel({
+                info,
+                paths: Array.from({ length: info.count }, (_, i) =>
+                  Array.from({ length: data.frames }, (_, t) => [
+                    raw[i * data.frames * 2 + t * 2] * info.position_scale_m,
+                    raw[i * data.frames * 2 + t * 2 + 1] * info.position_scale_m,
+                  ]),
+                ),
+              });
+            })
+            .catch((e) => {
+              if (e.name !== 'AbortError') setError(e.message);
+            });
+        }
       })
       .catch((e) => {
         if (e.name !== 'AbortError') setError(e.message);
@@ -111,7 +147,7 @@ export default function CorpusExplorer({ onDiagnostics }) {
     setLoading(true);
     setRows([]);
     setSelected(0);
-    fetchPaths(selection.chosen, controller.signal)
+    fetchPaths(selection.chosen, manifest.frames, manifest.position_scale_m, controller.signal)
       .then(setRows)
       .catch((e) => {
         if (e.name !== 'AbortError') setError(e.message);
@@ -120,7 +156,7 @@ export default function CorpusExplorer({ onDiagnostics }) {
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [selection]);
+  }, [selection, manifest]);
   const chosen = rows[selected];
   useEffect(() => {
     if (!chosen) {
@@ -138,7 +174,8 @@ export default function CorpusExplorer({ onDiagnostics }) {
             return r.arrayBuffer();
           })
           .then((buffer) => {
-            if (buffer.byteLength !== chosen.shard.count * 400) throw Error('Invalid action shard');
+            if (buffer.byteLength !== chosen.shard.count * manifest.frames * 8)
+              throw Error('Invalid action shard');
             actionCache.current.set(key, buffer);
             if (actionCache.current.size > 8)
               actionCache.current.delete(actionCache.current.keys().next().value);
@@ -150,9 +187,9 @@ export default function CorpusExplorer({ onDiagnostics }) {
         if (controller.signal.aborted) return;
         const view = new DataView(buffer);
         setSeries(
-          Array.from({ length: 50 }, (_, t) => [
-            view.getFloat32(chosen.index * 400 + t * 8, true),
-            view.getFloat32(chosen.index * 400 + t * 8 + 4, true),
+          Array.from({ length: manifest.frames }, (_, t) => [
+            view.getFloat32(chosen.index * manifest.frames * 8 + t * 8, true),
+            view.getFloat32(chosen.index * manifest.frames * 8 + t * 8 + 4, true),
           ]),
         );
       })
@@ -160,22 +197,22 @@ export default function CorpusExplorer({ onDiagnostics }) {
         if (e.name !== 'AbortError') setError(e.message);
       });
     return () => controller.abort();
-  }, [chosen]);
+  }, [chosen, manifest]);
   useEffect(() => {
     if (!playing) return;
     const timer = setInterval(
       () =>
         setTime((t) => {
-          if (t >= 49) {
+          if (t >= (manifest?.frames ?? 50) - 1) {
             setPlaying(false);
-            return 49;
+            return (manifest?.frames ?? 50) - 1;
           }
           return t + 1;
         }),
       100,
     );
     return () => clearInterval(timer);
-  }, [playing]);
+  }, [playing, manifest]);
   const clusters = useMemo(
     () =>
       manifest ? [...new Set(manifest.shards.map((s) => s.cluster))].sort((a, b) => a - b) : [],
@@ -209,7 +246,8 @@ export default function CorpusExplorer({ onDiagnostics }) {
             <p className="eyebrow">CORPUS</p>
             <h2>{manifest?.count.toLocaleString() ?? '—'} windows</h2>
             <p>
-              Browse the indexed collection. Only a bounded, diverse working set enters the browser.
+              {source?.dataset ?? 'INTERACTION'} · {manifest?.frames ?? 50} samples at 10 Hz. Only a
+              bounded working set enters the browser.
             </p>
           </section>
           <section className="metric-row">
@@ -275,7 +313,7 @@ export default function CorpusExplorer({ onDiagnostics }) {
             <Button
               label={playing ? 'Pause' : 'Play'}
               onClick={() => {
-                if (time === 49) setTime(0);
+                if (time === (manifest?.frames ?? 50) - 1) setTime(0);
                 setPlaying(!playing);
               }}
               isDisabled={!rows.length}
@@ -284,7 +322,7 @@ export default function CorpusExplorer({ onDiagnostics }) {
               label="Elapsed time"
               value={time}
               min={0}
-              max={49}
+              max={(manifest?.frames ?? 50) - 1}
               step={1}
               onChange={setTime}
               formatValue={(v) => `${(v / 10).toFixed(1)} s`}
@@ -312,8 +350,8 @@ export default function CorpusExplorer({ onDiagnostics }) {
           <header className="viewer-heading">
             <strong>Corpus overview</strong>
             <small>
-              {rows.length} displayed / {selection?.count.toLocaleString() ?? '—'} matching · 0–4.9
-              s
+              {rows.length} displayed / {selection?.count.toLocaleString() ?? '—'} matching · 0–
+              {(((manifest?.frames ?? 50) - 1) / 10).toFixed(1)} s
             </small>
           </header>
           <FallbackViewer
@@ -322,9 +360,16 @@ export default function CorpusExplorer({ onDiagnostics }) {
             selectedIndex={selected}
             labels={labels}
             palette={palette}
+            exemplarPath={model?.paths[chosen?.cluster]}
             onSelect={(index) => setSelected(index)}
           />
-          <ActionPlots series={series} time={time} onSeek={setTime} sampleIndex={chosen?.id ?? 0} />
+          <ActionPlots
+            series={series}
+            time={time}
+            onSeek={setTime}
+            sampleIndex={chosen?.id ?? 0}
+            frames={manifest?.frames ?? 50}
+          />
           {error && (
             <p className="error" role="alert">
               {error}
@@ -333,8 +378,17 @@ export default function CorpusExplorer({ onDiagnostics }) {
         </section>
       </section>
       <footer>
-        Static indexed shards can be hosted on a CDN; the GitHub Pages app fetches only the active
-        working set.
+        {source?.dataset === 'Argoverse 2 Motion Forecasting' ? (
+          <>
+            AV2 data © 2021 Argo AI, LLC ·{' '}
+            <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/">CC BY-NC-SA 4.0</a> ·{' '}
+            {source.scenarios < 250000 ? 'Preview · ' : ''}
+            {source.scenarios} source scenarios · {model?.info.training_windows ?? '—'} windows used
+            for exemplar fitting.
+          </>
+        ) : (
+          'Static indexed shards can be hosted on a CDN; only the active working set is fetched.'
+        )}
       </footer>
     </article>
   );

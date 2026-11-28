@@ -1,153 +1,36 @@
 # Trajalyzer
 
-Interactive exploration of real vehicle trajectories from the [INTERACTION
-dataset](https://huggingface.co/datasets/INTERACTION-dataset/INTERACTION-dataset)
-(CC BY 4.0). Vehicle tracks from the traffic-camera intersection subset are
-converted to five-second, 10 Hz ego-relative windows. The Rerun web recording
-contains a reproducible 500-window sample from a 5,000-window batch, restricted
-to windows that sustain at least 1 m/s throughout. An Astryx
-React shell provides lateral-displacement cohorts, playback, timeline scrubbing,
-dataset context, and a responsive inspector around the embedded Rerun viewer.
-Acceleration and curvature plots share the viewer's timeline cursor. The
-selected path is tagged with its nearest one of 64 observed training exemplars;
-Rerun and the 2D fallback use the same exemplar colors.
-On browsers without WebGL2, a lightweight 2D canvas uses the same sample and
-controls. This first subset is one intersection and is not representative of
-every driving behavior.
+Interactive exploration of observed vehicle trajectories. The primary indexed corpus uses [Argoverse 2 Motion Forecasting](https://www.argoverse.org/av2.html) (AV2) at its native **11 seconds, 10 Hz, 110 positions**. Complete, moving AV and vehicle/bus tracks are translated and rotated into each vehicle's starting frame. Acceleration and curvature are inferred from the planar trajectory using differential flatness and plotted against the synchronized playback cursor. A separate, earlier Rerun diagnostic view still uses a 5-second, 50-frame [INTERACTION](https://huggingface.co/datasets/INTERACTION-dataset/INTERACTION-dataset) sample.
+
+The browser requests bounded position shards and only fetches a selected shard's action data when needed. It shows at most 768 paths at once while paging through the full indexed corpus. The representative colored paths are **observed exemplars**, selected nearest to MiniBatchKMeans centers in the feature space. The deployed AV2 sample uses 100 scenarios and 16 preview exemplars. It is labeled as a preview; its clusters do not claim to represent all AV2 driving behavior.
 
 ## Run locally
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -e '.[dev,viewer]'
+pip install -e '.[dev,corpus,viewer]'
 npm --prefix web ci
 pre-commit install --hook-type pre-commit --hook-type pre-push
 npm --prefix web run dev
 ```
 
-From the repository root, one command regenerates all four Rerun recordings,
-action sequences, cluster assignments, exemplars, and the canvas sample:
+`./scripts/check.sh` runs Ruff, Black, Python tests, ESLint, Prettier, and the Vite build. The Pages workflow additionally runs Rust format, Clippy, tests, and the AV2 preview build before deployment. The committed `web/public` Rerun recordings and diagnostic binaries are from the INTERACTION sample; `python scripts/build_recording.py` regenerates those if needed. `python scripts/build_corpus.py` remains a small 50-frame protocol fixture against those binaries.
+
+## AV2 pipeline
 
 ```bash
-python scripts/build_recording.py
+python scripts/stream_av2.py --split train --tracks vehicles --limit-scenarios 1000 --output data/av2-sample
+python scripts/fit_av2_exemplars.py data/av2-sample data/av2-model --clusters 64
+cargo run --release --manifest-path native/Cargo.toml -- --pack data/av2-sample data/av2-model/model.json data/av2-corpus
 ```
 
-The committed `web/public` assets are ready to use. Regenerate them only when
-the dataset sampling, inference, or clustering code changes.
+The Python adapter fetches public scenario Parquet objects into bounded memory and streams rows to a Rust extractor. The raw dataset is not saved. The resulting feature and position store is disk-backed; scikit-learn fits in bounded batches across **every eligible stored window**, then selects actual trajectories closest to its centers. Rust packs the assigned corpus into version 2 binary shards with 110 positions at 5 cm resolution, and action samples at 10 Hz. `source.json`, `index.csv`, and `model-meta.json` retain provenance and the fit's true training count. The AV2 workflow and source constraints are detailed in [data sources](docs/data_sources.md).
 
-The archive is downloaded into memory. Processed windows are cached under
-`data/.cache`; the original ZIP is never stored locally. The core loader only
-requires NumPy. You can also run the Python Rerun viewer with
-`python -m trajectory_manifold.viewer`.
+Kinematic state is `(x, y, yaw, speed)` and the inferred action is `(acceleration, curvature)`. From smoothed velocity `(ẋ,ẏ)` and acceleration `(ẍ,ÿ)`, `yaw = atan2(ẏ,ẋ)`, `speed = hypot(ẋ,ẏ)`, `acceleration = (ẋẍ+ẏÿ)/speed`, and `curvature = (ẋÿ−ẏẍ)/speed³`. A local seven-point cubic fit supplies derivatives. Windows below 1 m/s are excluded because heading and curvature become poorly determined. These are estimates, not recorded control commands.
 
-## Fast feedback
+## Publish a full-data corpus
 
-Run `./scripts/check.sh` before publishing. It runs Ruff, Black's format check,
-the Python unit tests, ESLint, Prettier, and the Vite production build. Commit
-hooks run the fast formatters and linters on changed files; the push hook runs
-the full gate. GitHub Actions runs that same script before deploying Pages.
-Use `black trajectory_manifold scripts tests` and `npm --prefix web run format`
-to apply formatting. `ruff check --fix trajectory_manifold scripts tests`
-handles safe Python lint fixes.
+The [AV2 guide](docs/data_sources.md) gives the full training-split extraction and exemplar commands. Publish the packed directory to an object store/CDN and set the repository Actions variable `VITE_CORPUS_BASE_URL` to its public trailing-slash URL. Configure CORS for the Pages origin. GitHub Pages hosts the app and a small preview at <https://bengravell.github.io/trajalyzer/>; millions of trajectories and their shards belong on scalable storage. An analytical Parquet mirror can be generated with `python scripts/export_parquet.py /path/to/corpus /path/to/parquet` and read with Polars or Arrow scanners.
 
-## Kinematic actions and exemplars
-
-`trajectory_manifold.kinematics.infer_kinematics` returns arrays for
-`[x, y, yaw, speed]`, `[acceleration, curvature]`, and a validity mask.
-With velocity `(ẋ,ẏ)` and acceleration `(ẍ,ÿ)` estimated by a local cubic
-least-squares fit over seven samples, the flatness equations are
-`yaw = atan2(ẏ,ẋ)`, `speed = hypot(ẋ,ẏ)`,
-`acceleration = (ẋẍ+ẏÿ)/speed`, and
-`curvature = (ẋÿ−ẏẍ)/speed³`. Position and time retain metres and seconds.
-At low speed, heading and curvature are not identifiable; this web sample
-excludes such windows. These are derivative estimates, not measured controls.
-
-`trajectory_manifold.clustering.fit_exemplars(batch_factory, n_exemplars=64)`
-uses scikit-learn MiniBatchKMeans in repeatable batches and chooses an actual
-training trajectory nearest each center. `assign_exemplars(model, new_batch)`
-then compares new trajectories against those observed exemplars. Features
-combine downsampled positions, speed, acceleration, and curvature with fixed
-physical scales. The builder holds out entire tracks by hash before fitting,
-then assigns all displayed paths, including held-out tracks. It saves a reusable
-`data/.cache/exemplar_model.npz` with feature vectors and trajectories.
-The four display cohorts remain geometric descriptions, not behavior labels.
-
-For larger collections, pass a repeatable batch factory that reads one chunk
-of training tracks at a time. The fit stores one feature batch and the
-exemplars, not the full trajectory matrix. Its multiple passes require that
-the factory can reopen the source. `iter_trajectory_batches` in the loader
-streams INTERACTION windows without assembling the full array. Filter low-speed
-windows and split by original track or scene before making training batches.
-
-## Publish
-
-The Pages workflow builds `web/` on pushes to `main`. In the GitHub repository,
-select **Settings → Pages → Build and deployment → Source: GitHub Actions**.
-The expected project URL is `https://bengravell.github.io/trajalyzer/` after a
-successful deployment. The generated recordings and viewer package use matching
-Rerun version 0.31.1. The Astryx Core, theme, and CLI share version 0.7.17.
-
-INTERACTION Dataset: Zhan et al., *INTERACTION Dataset: An INTERnational,
-Adversarial and Cooperative moTION Dataset in Interactive Driving Scenarios
-with Semantic Maps*, arXiv:1910.03088 (2019).
-
-## Indexed corpus mode
-
-The landing view now reads `web/public/corpus/manifest.json`, requests at most
-six position shards and displays at most 768 windows. The corpus page control
-covers every shard in successive views. It downloads a selected shard's
-actions on demand. Filters count all matching windows in the manifest while
-the display remains bounded; the path slider refers to **loaded** paths. The
-Rerun diagnostic view remains available on demand and is loaded as a separate JavaScript module.
-
-The Pages build generates its corpus with the Rust builder from the verified
-small INTERACTION archive and the committed 64-exemplar feature model. The
-Rerun diagnostic recording remains the existing 500-window sample. For a quick
-protocol fixture without Cargo or network access, run
-`python scripts/build_corpus.py` against the checked-in diagnostic binaries.
-
-For a larger INTERACTION CSV collection, fit exemplars on training tracks with
-the existing scikit-learn pipeline, export the model, and run the native builder:
-
-```bash
-python scripts/export_exemplars.py data/.cache/exemplar_model.npz data/.cache/exemplars.json
-python scripts/build_native_corpus.py --input /path/to/interaction/csv --model data/.cache/exemplars.json --output /path/to/corpus
-```
-
-Omit `--input` to fetch and verify the small official TC archive automatically.
-The Rust builder groups one source file at a time through temporary disk
-partitions sized from its source bytes, segments tracks on time gaps and
-impossible jumps, resamples 50 positions at 10 Hz, excludes windows below 1 m/s, infers acceleration and
-curvature with the same seven-point cubic local fit, assigns the nearest
-observed exemplar, and writes independent, cacheable shards. It also writes
-`index.csv` with source track and start time for provenance. The static shard
-protocol stores 208 bytes per path (100 int16 centimetre coordinates, uint32
-trajectory ID, float32 exemplar distance); actions occupy a separate 400-byte
-file per path. The collection is never held in memory as one array. Native
-Rust tests, format, and Clippy run in the Pages workflow.
-
-Optionally export a columnar analytical mirror:
-
-```bash
-pip install -e '.[corpus]'
-python scripts/export_parquet.py /path/to/corpus /path/to/parquet
-```
-
-The Parquet files are partitioned by cohort and cluster with fixed-size Arrow
-lists. Read them with Polars `scan_parquet` or Arrow Dataset scanners; the web
-app uses the lean binary shards rather than parsing Parquet in a mobile browser.
-For a corpus too large for GitHub Pages, upload the corpus directory to an
-object store/CDN and set the repository Actions variable `VITE_CORPUS_BASE_URL`
-to its public URL (ending in `/`). Configure CORS for the Pages origin. The Pages repository
-then contains the application and small diagnostic sample, while the CDN serves
-immutable corpus shards. Changing the manifest should be deployed atomically
-with its shards. The currently bundled source has only one intersection and
-must not be interpreted as a million independent behaviors.
-
-## Million-window source
-
-[Argoverse 2 acquisition and provenance](docs/data_sources.md) documents the
-public Parquet source, a bounded S3-to-Rust streaming command, preliminary
-motion-filter yield, licensing, and alternative datasets. The small AV2 pilot
-runs in CI without changing the deployed INTERACTION demonstration.
+AV2 is CC BY-NC-SA 4.0, attributed `© 2021 Argo AI, LLC`. The separately labeled INTERACTION diagnostic sample is CC BY 4.0. The current pilot does **not** establish that the full AV2 split has a million eligible full-length moving tracks, and the full-data fit has not yet run.

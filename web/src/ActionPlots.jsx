@@ -6,9 +6,10 @@ const left = 42,
   right = 574,
   top = 16,
   bottom = 104;
-const xAt = (i) => left + (i * (right - left)) / 49;
 
-function Plot({ series, time, onSeek, config }) {
+function Plot({ series, time, onSeek, config, frames }) {
+  const last = frames - 1;
+  const xAt = (i) => left + (i * (right - left)) / last;
   const values = series?.map((row) => row[config.index]) ?? [];
   const finite = values.filter(Number.isFinite);
   const extent = Math.max(config.floor, ...finite.map(Math.abs));
@@ -21,7 +22,7 @@ function Plot({ series, time, onSeek, config }) {
       open = true;
     } else open = false;
   });
-  const current = values[Math.min(49, Math.round(time))];
+  const current = values[Math.min(last, Math.round(time))];
   const label = Number.isFinite(current)
     ? `${current.toFixed(config.index ? 3 : 2)} ${config.unit}`
     : 'undefined at low speed';
@@ -29,7 +30,7 @@ function Plot({ series, time, onSeek, config }) {
     const rect = event.currentTarget.getBoundingClientRect();
     const pixel = ((event.clientX - rect.left) / rect.width) * 600;
     const fraction = Math.max(0, Math.min(1, (pixel - left) / (right - left)));
-    onSeek(Math.round(fraction * 49));
+    onSeek(Math.round(fraction * last));
   };
   return (
     <section className="action-plot">
@@ -44,11 +45,11 @@ function Plot({ series, time, onSeek, config }) {
         tabIndex="0"
         aria-label={`${config.title} time cursor`}
         aria-valuemin="0"
-        aria-valuemax="49"
+        aria-valuemax={last}
         aria-valuenow={Math.round(time)}
         aria-valuetext={`${(time / 10).toFixed(1)} seconds`}
         onKeyDown={(e) => {
-          if (e.key === 'ArrowRight') onSeek(Math.min(49, Math.round(time) + 1));
+          if (e.key === 'ArrowRight') onSeek(Math.min(last, Math.round(time) + 1));
           if (e.key === 'ArrowLeft') onSeek(Math.max(0, Math.round(time) - 1));
         }}
         onPointerDown={(e) => {
@@ -83,24 +84,33 @@ function Plot({ series, time, onSeek, config }) {
           0 s
         </text>
         <text x={right - 25} y="118">
-          4.9 s
+          {(last / 10).toFixed(1)} s
         </text>
       </svg>
     </section>
   );
 }
 
-export default function ActionPlots({ series, time, onSeek, sampleIndex }) {
+export default function ActionPlots({ series, time, onSeek, sampleIndex, frames = 50 }) {
   const valid = series?.filter((row) => Number.isFinite(row[1])).length ?? 0;
   return (
     <section className="diagnostics" aria-label="Inferred action diagnostics">
       <header className="diagnostics-heading">
         <strong>Inferred actions · sample path {sampleIndex + 1}</strong>
-        <small>{valid}/50 valid · local cubic derivative, 0.7 s window · moving paths ≥1 m/s</small>
+        <small>
+          {valid}/{frames} valid · local cubic derivative, 0.7 s window · moving paths ≥1 m/s
+        </small>
       </header>
       <section className="plot-grid-layout">
         {plots.map((config) => (
-          <Plot key={config.index} config={config} series={series} time={time} onSeek={onSeek} />
+          <Plot
+            key={config.index}
+            config={config}
+            series={series}
+            time={time}
+            onSeek={onSeek}
+            frames={frames}
+          />
         ))}
       </section>
     </section>

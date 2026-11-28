@@ -143,7 +143,7 @@ def main():
     parser.add_argument(
         "--save-slice-map", action="store_true", help="Save the train scenario-to-source-slice map"
     )
-    parser.add_argument("--model", type=Path, default=Path("models/interaction_tc_exemplars.json"))
+    parser.add_argument("--model", type=Path, help="Optional prefit AV2 model for direct packing")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.limit_scenarios < 1 or args.workers < 1:
@@ -155,17 +155,11 @@ def main():
     keys = scenario_keys(
         args.split, limit=None if args.all else args.limit_scenarios, start_after=args.start_after
     )
-    command = [
-        "cargo",
-        "run",
-        "--release",
-        "--manifest-path",
-        "native/Cargo.toml",
-        "--",
-        "--stream",
-        str(args.model),
-        str(args.output),
-    ]
+    command = ["cargo", "run", "--release", "--manifest-path", "native/Cargo.toml", "--"]
+    if args.model:
+        command.extend(["--stream", str(args.model), str(args.output)])
+    else:
+        command.extend(["--extract", str(args.output)])
     process = subprocess.Popen(command, stdin=subprocess.PIPE)
     if process.stdin is None:
         raise RuntimeError("Native process has no input pipe")

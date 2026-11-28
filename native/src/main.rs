@@ -4,15 +4,17 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fs::{self, File};
-use std::io::{self, BufWriter, Write};
+use std::io::{self, BufWriter, Read, Write};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
-const FRAMES: usize = 50;
+const FRAMES: usize = 110;
+const FEATURE_DIM: usize = (FRAMES / 2) * 5;
 const RATE: f64 = 10.0;
 const STRIDE: f64 = 1.0;
 const MIN_SPEED: f64 = 1.0;
+const POSITION_SCALE_M: f64 = 0.05;
 const SHARD_SIZE: usize = 128;
 
 #[derive(Deserialize, Serialize)]
@@ -39,6 +41,13 @@ struct StreamRow {
 #[derive(Deserialize)]
 struct Model {
     features: Vec<Vec<f32>>,
+}
+#[derive(Deserialize)]
+struct IndexRow {
+    trajectory_id: u64,
+    source_file: String,
+    track_id: String,
+    start_time_s: f64,
 }
 #[derive(Serialize)]
 struct Shard {
@@ -69,6 +78,68 @@ struct Builder {
     shards: Vec<Shard>,
     count: u64,
     index: BufWriter<File>,
+}
+struct FeatureStore {
+    root: PathBuf,
+    positions: BufWriter<File>,
+    features: BufWriter<File>,
+    index: csv::Writer<File>,
+    count: u64,
+}
+enum Sink {
+    Corpus(Builder, Model),
+    Features(FeatureStore),
+}
+impl FeatureStore {
+    fn new(root: PathBuf) -> Result<Self> {
+        fs::create_dir_all(&root)?;
+        let positions = BufWriter::new(File::create(root.join("positions.f32"))?);
+        let features = BufWriter::new(File::create(root.join("features.f32"))?);
+        let mut index = csv::Writer::from_path(root.join("index.csv"))?;
+        index.write_record(["trajectory_id", "source_file", "track_id", "start_time_s"])?;
+        Ok(Self { root, positions, features, index, count: 0 })
+    }
+    fn add(&mut self, positions: [[f32; 2]; FRAMES], features: &[f32], source: &Path, track: &str, start: f64) -> Result<()> {
+        for pair in positions { for value in pair { self.positions.write_all(&value.to_le_bytes())?; } }
+        for value in features { self.features.write_all(&value.to_le_bytes())?; }
+        self.index.write_record([
+            self.count.to_string(),
+            source.to_string_lossy().into_owned(),
+            track.to_string(),
+            format!("{start:.3}"),
+        ])?;
+        self.count += 1;
+        Ok(())
+    }
+    fn finish(mut self) -> Result<()> {
+        self.positions.flush()?;
+        self.features.flush()?;
+        self.index.flush()?;
+        serde_json::to_writer(File::create(self.root.join("store.json"))?, &serde_json::json!({
+            "version": 1, "count": self.count, "frames": FRAMES, "feature_dim": FEATURE_DIM,
+            "sample_rate_hz": 10, "min_speed_mps": MIN_SPEED
+        }))?;
+        println!("Extracted {} moving windows to feature store", self.count);
+        Ok(())
+    }
+}
+impl Sink {
+    fn add(&mut self, positions: [[f32; 2]; FRAMES], actions: [[f32; 2]; FRAMES],
+           features: &[f32], source: &Path, track: &str, start: f64) -> Result<()> {
+        match self {
+            Self::Corpus(builder, model) => {
+                let (cluster, distance) = assign(features, model)?;
+                builder.add(positions, actions, cluster, distance, source, track, start)
+            }
+            Self::Features(store) => store.add(positions, features, source, track, start),
+        }
+    }
+    fn finish(self) -> Result<()> {
+        match self { Self::Corpus(builder, _) => builder.finish(), Self::Features(store) => store.finish() }
+    }
+    fn root(&self) -> &Path {
+        match self { Self::Corpus(builder, _) => &builder.root, Self::Features(store) => &store.root }
+    }
 }
 impl Builder {
     fn new(root: PathBuf) -> Result<Self> {
@@ -103,9 +174,9 @@ impl Builder {
         for row in rows.iter() {
             for point in row.positions {
                 for value in point {
-                    let cm = (f64::from(value) * 100.0).round();
-                    if !(-32767.0..=32767.0).contains(&cm) { return Err("Position exceeds int16 centimetres".into()); }
-                    paths.write_all(&(cm as i16).to_le_bytes())?;
+                    let scaled = (f64::from(value) / POSITION_SCALE_M).round();
+                    if !(-32767.0..=32767.0).contains(&scaled) { return Err("Position exceeds int16 display range".into()); }
+                    paths.write_all(&(scaled as i16).to_le_bytes())?;
                 }
             }
             paths.write_all(&row.id.to_le_bytes())?;
@@ -120,7 +191,7 @@ impl Builder {
         let keys: Vec<_> = self.pending.keys().cloned().collect();
         for key in &keys { self.flush(key)?; }
         self.index.flush()?;
-        let manifest = Manifest { version: 1, count: self.count, frames: FRAMES, sample_rate_hz: 10, position_scale_m: 0.01, shards: &self.shards };
+        let manifest = Manifest { version: 2, count: self.count, frames: FRAMES, sample_rate_hz: 10, position_scale_m: POSITION_SCALE_M, shards: &self.shards };
         serde_json::to_writer(File::create(self.root.join("manifest.json"))?, &manifest)?;
         println!("Indexed {} windows in {} shards", self.count, self.shards.len());
         Ok(())
@@ -172,7 +243,7 @@ fn actions_and_features(p: &[[f32; 2]; FRAMES], weights: &[(usize, [f64; 7], [f6
         actions[i] = [((v[0] * a[0] + v[1] * a[1]) / speed) as f32,
                       ((v[0] * a[1] - v[1] * a[0]) / speed.powi(3)) as f32];
     }
-    let mut feature = Vec::with_capacity(125);
+    let mut feature = Vec::with_capacity(FEATURE_DIM);
     for axis in 0..2 { for i in (0..FRAMES).step_by(2) { feature.push(p[i][axis] / if axis == 0 {20.0} else {10.0}); } }
     for i in (0..FRAMES).step_by(2) { feature.push((speeds[i] / 8.0) as f32); }
     for axis in 0..2 { for i in (0..FRAMES).step_by(2) {
@@ -196,7 +267,7 @@ fn interpolate(rows: &[Row], target: f64, cursor: &mut usize) -> [f64; 2] {
     let alpha = ((target - t0) / (t1 - t0)).clamp(0.0, 1.0);
     [left.x + alpha * (right.x - left.x), left.y + alpha * (right.y - left.y)]
 }
-fn process_segment(rows: &[Row], source: &Path, track: &str, model: &Model, builder: &mut Builder, weights: &[(usize, [f64; 7], [f64; 7])]) -> Result<()> {
+fn process_segment(rows: &[Row], source: &Path, track: &str, sink: &mut Sink, weights: &[(usize, [f64; 7], [f64; 7])]) -> Result<()> {
     if rows.len() < 2 { return Ok(()); }
     let first = rows[0].timestamp_ms as f64 / 1000.0;
     let last = rows[rows.len() - 1].timestamp_ms as f64 / 1000.0;
@@ -215,23 +286,22 @@ fn process_segment(rows: &[Row], source: &Path, track: &str, model: &Model, buil
                 positions[i] = [(c * dx + s * dy) as f32, (-s * dx + c * dy) as f32];
             }
             if let Some((actions, features)) = actions_and_features(&positions, weights) {
-                let (cluster, distance) = assign(&features, model)?;
-                builder.add(positions, actions, cluster, distance, source, track, start)?;
+                sink.add(positions, actions, &features, source, track, start)?;
             }
         }
         start += STRIDE;
     }
     Ok(())
 }
-fn process_partition(path: &Path, source: &Path, model: &Model, builder: &mut Builder, weights: &[(usize, [f64; 7], [f64; 7])]) -> Result<()> {
+fn process_partition(path: &Path, source: &Path, sink: &mut Sink, weights: &[(usize, [f64; 7], [f64; 7])]) -> Result<()> {
     let mut tracks: HashMap<String, Vec<Row>> = HashMap::new();
     for row in csv::Reader::from_path(path)?.deserialize::<Row>() {
         let row = row?;
         tracks.entry(row.track_id.clone()).or_default().push(row);
     }
-    process_tracks(tracks, source, model, builder, weights)
+    process_tracks(tracks, source, sink, weights)
 }
-fn process_tracks(tracks: HashMap<String, Vec<Row>>, source: &Path, model: &Model, builder: &mut Builder, weights: &[(usize, [f64; 7], [f64; 7])]) -> Result<()> {
+fn process_tracks(tracks: HashMap<String, Vec<Row>>, source: &Path, sink: &mut Sink, weights: &[(usize, [f64; 7], [f64; 7])]) -> Result<()> {
     let mut tracks: Vec<_> = tracks.into_iter().collect();
     tracks.sort_by(|a, b| a.0.cmp(&b.0));
     for (track, mut rows) in tracks {
@@ -244,14 +314,14 @@ fn process_tracks(tracks: HashMap<String, Vec<Row>>, source: &Path, model: &Mode
                 dt <= 0.0 || dt > 0.3 || !speed.is_finite() || speed > 70.0
             };
             if cut {
-                process_segment(&rows[segment..i], source, &track, model, builder, weights)?;
+                process_segment(&rows[segment..i], source, &track, sink, weights)?;
                 segment = i;
             }
         }
     }
     Ok(())
 }
-fn process_stream(model: &Model, builder: &mut Builder, weights: &[(usize, [f64; 7], [f64; 7])]) -> Result<()> {
+fn process_stream(sink: &mut Sink, weights: &[(usize, [f64; 7], [f64; 7])]) -> Result<()> {
     // The Arrow adapter emits complete scenarios consecutively. Retain only
     // one scenario's tracks, regardless of total corpus size.
     let stdin = io::stdin();
@@ -261,7 +331,7 @@ fn process_stream(model: &Model, builder: &mut Builder, weights: &[(usize, [f64;
         let item = item?;
         if current.as_deref() != Some(item.scenario_id.as_str()) {
             if let Some(id) = current.take() {
-                process_tracks(std::mem::take(&mut tracks), Path::new(&id), model, builder, weights)?;
+                process_tracks(std::mem::take(&mut tracks), Path::new(&id), sink, weights)?;
             }
             current = Some(item.scenario_id.clone());
         }
@@ -272,16 +342,16 @@ fn process_stream(model: &Model, builder: &mut Builder, weights: &[(usize, [f64;
         });
     }
     if let Some(id) = current {
-        process_tracks(tracks, Path::new(&id), model, builder, weights)?;
+        process_tracks(tracks, Path::new(&id), sink, weights)?;
     }
     Ok(())
 }
-fn process_csv(path: &Path, model: &Model, builder: &mut Builder, weights: &[(usize, [f64; 7], [f64; 7])]) -> Result<()> {
+fn process_csv(path: &Path, sink: &mut Sink, weights: &[(usize, [f64; 7], [f64; 7])]) -> Result<()> {
     // Hash partitioning bounds memory even if one CSV contains millions of rows.
     // All rows for a track land in the same temporary partition. Small files
     // need just one partition; large files target roughly 16 MiB of raw CSV.
     let partitions = (fs::metadata(path)?.len().div_ceil(16 * 1024 * 1024) as usize).clamp(1, 256);
-    let stage = builder.root.join(".stage");
+    let stage = sink.root().join(".stage");
     fs::create_dir_all(&stage)?;
     let mut writers: Vec<_> = (0..partitions)
         .map(|i| csv::Writer::from_path(stage.join(format!("{i:02}.csv"))))
@@ -296,7 +366,7 @@ fn process_csv(path: &Path, model: &Model, builder: &mut Builder, weights: &[(us
     drop(writers);
     for i in 0..partitions {
         let partition = stage.join(format!("{i:02}.csv"));
-        process_partition(&partition, path, model, builder, weights)?;
+        process_partition(&partition, path, sink, weights)?;
         fs::remove_file(partition)?;
     }
     fs::remove_dir(stage)?;
@@ -308,23 +378,82 @@ fn collect_csv(input: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
     } else if input.extension().and_then(|e| e.to_str()) == Some("csv") { files.push(input.to_path_buf()); }
     Ok(())
 }
+fn load_model(path: &Path) -> Result<Model> {
+    let model: Model = serde_json::from_reader(File::open(path)?)?;
+    if model.features.is_empty() || model.features.iter().any(|f| f.len() != FEATURE_DIM) {
+        return Err(format!("Expected nonempty {FEATURE_DIM}-dimensional exemplar features").into());
+    }
+    Ok(model)
+}
+fn pack_store(store: &Path, model_path: &Path, output: PathBuf) -> Result<()> {
+    let model = load_model(model_path)?;
+    let description: serde_json::Value = serde_json::from_reader(File::open(store.join("store.json"))?)?;
+    let count = description["count"].as_u64().ok_or("Missing store count")?;
+    if description["frames"].as_u64() != Some(FRAMES as u64)
+        || description["feature_dim"].as_u64() != Some(FEATURE_DIM as u64) {
+        return Err("Feature store has incompatible dimensions".into());
+    }
+    let mut positions = File::open(store.join("positions.f32"))?;
+    let mut features = File::open(store.join("features.f32"))?;
+    if positions.metadata()?.len() != count * (FRAMES * 2 * 4) as u64
+        || features.metadata()?.len() != count * (FEATURE_DIM * 4) as u64 {
+        return Err("Feature store has inconsistent file lengths".into());
+    }
+    let mut builder = Builder::new(output.clone())?;
+    let weights = stencils();
+    let mut position_bytes = vec![0; FRAMES * 2 * 4];
+    let mut feature_bytes = vec![0; FEATURE_DIM * 4];
+    let mut seen = 0;
+    for item in csv::Reader::from_path(store.join("index.csv"))?.deserialize::<IndexRow>() {
+        let row = item?;
+        if row.trajectory_id != seen { return Err("Feature store index is out of order".into()); }
+        positions.read_exact(&mut position_bytes)?;
+        features.read_exact(&mut feature_bytes)?;
+        let mut path = [[0.0; 2]; FRAMES];
+        for (i, bytes) in position_bytes.chunks_exact(4).enumerate() {
+            path[i / 2][i % 2] = f32::from_le_bytes(bytes.try_into()?);
+        }
+        let feature: Vec<f32> = feature_bytes.chunks_exact(4)
+            .map(|bytes| f32::from_le_bytes(bytes.try_into().expect("4-byte chunks"))).collect();
+        let (actions, _) = actions_and_features(&path, &weights).ok_or("Invalid stored motion")?;
+        let (cluster, distance) = assign(&feature, &model)?;
+        builder.add(path, actions, cluster, distance, Path::new(&row.source_file), &row.track_id, row.start_time_s)?;
+        seen += 1;
+    }
+    if seen != count { return Err("Feature store index count differs from data".into()); }
+    builder.finish()?;
+    for name in ["exemplars.bin", "model-meta.json"] {
+        let source = model_path.with_file_name(name);
+        if source.is_file() { fs::copy(source, output.join(name))?; }
+    }
+    let provenance = store.join("source.json");
+    if provenance.is_file() { fs::copy(provenance, output.join("source.json"))?; }
+    Ok(())
+}
 fn run() -> Result<()> {
     let args: Vec<_> = std::env::args().collect();
-    if args.len() != 4 { return Err("Usage: trajalyzer-corpus INPUT_CSV_OR_DIRECTORY|--stream EXEMPLARS_JSON OUTPUT_DIRECTORY".into()); }
-    let model: Model = serde_json::from_reader(File::open(&args[2])?)?;
-    if model.features.is_empty() || model.features.iter().any(|f| f.len() != 125) { return Err("Expected nonempty 125-dimensional exemplar features".into()); }
-    let mut builder = Builder::new(PathBuf::from(&args[3]))?;
+    if args.len() == 5 && args[1] == "--pack" {
+        return pack_store(Path::new(&args[2]), Path::new(&args[3]), PathBuf::from(&args[4]));
+    }
+    if args.len() == 3 && args[1] == "--extract" {
+        let mut sink = Sink::Features(FeatureStore::new(PathBuf::from(&args[2]))?);
+        process_stream(&mut sink, &stencils())?;
+        return sink.finish();
+    }
+    if args.len() != 4 { return Err("Usage: trajalyzer-corpus INPUT_CSV|--stream MODEL OUTPUT; --extract STORE; --pack STORE MODEL OUTPUT".into()); }
+    let model = load_model(Path::new(&args[2]))?;
+    let mut sink = Sink::Corpus(Builder::new(PathBuf::from(&args[3]))?, model);
     let weights = stencils();
     if args[1] == "--stream" {
-        process_stream(&model, &mut builder, &weights)?;
+        process_stream(&mut sink, &weights)?;
     } else {
         let mut files = Vec::new();
         collect_csv(Path::new(&args[1]), &mut files)?;
         files.sort();
         if files.is_empty() { return Err("No CSV files found".into()); }
-        for file in files { process_csv(&file, &model, &mut builder, &weights)?; }
+        for file in files { process_csv(&file, &mut sink, &weights)?; }
     }
-    builder.finish()
+    sink.finish()
 }
 fn main() { if let Err(error) = run() { eprintln!("{error}"); std::process::exit(1); } }
 
@@ -336,7 +465,7 @@ mod tests {
         let mut p = [[0.0; 2]; FRAMES];
         for (i, point) in p.iter_mut().enumerate() { let t = i as f32 / 10.0; point[0] = 5.0 * t + 0.5 * t * t; }
         let (a, f) = actions_and_features(&p, &stencils()).unwrap();
-        assert_eq!(f.len(), 125);
+        assert_eq!(f.len(), FEATURE_DIM);
         for pair in a { assert!((pair[0] - 1.0).abs() < 1e-3); assert!(pair[1].abs() < 1e-5); }
     }
     #[test]
@@ -346,21 +475,21 @@ mod tests {
         let csv_path = root.join("vehicle_tracks_test.csv");
         let mut csv = File::create(&csv_path).unwrap();
         writeln!(csv, "track_id,timestamp_ms,x,y,vx,vy,psi_rad").unwrap();
-        for i in 0..60 { writeln!(csv, "7,{},{},0,4,0,0", i * 100, i as f64 * 0.4).unwrap(); }
+        for i in 0..120 { writeln!(csv, "7,{},{},0,4,0,0", i * 100, i as f64 * 0.4).unwrap(); }
         drop(csv);
         let mut sample = [[0.0; 2]; FRAMES];
         for (i, point) in sample.iter_mut().enumerate() { point[0] = i as f32 * 0.4; }
         let weights = stencils();
         let (_, feature) = actions_and_features(&sample, &weights).unwrap();
         let model = Model { features: vec![feature] };
-        let mut builder = Builder::new(root.join("out")).unwrap();
-        process_csv(&csv_path, &model, &mut builder, &weights).unwrap();
-        builder.finish().unwrap();
+        let mut sink = Sink::Corpus(Builder::new(root.join("out")).unwrap(), model);
+        process_csv(&csv_path, &mut sink, &weights).unwrap();
+        sink.finish().unwrap();
         let manifest: serde_json::Value = serde_json::from_reader(File::open(root.join("out/manifest.json")).unwrap()).unwrap();
         assert_eq!(manifest["count"], 2);
         assert_eq!(manifest["shards"][0]["count"], 2);
         let first = manifest["shards"][0]["path"].as_str().unwrap();
-        assert_eq!(fs::metadata(root.join("out").join(first)).unwrap().len(), 416);
+        assert_eq!(fs::metadata(root.join("out").join(first)).unwrap().len(), 896);
         fs::remove_dir_all(root).unwrap();
     }
 }

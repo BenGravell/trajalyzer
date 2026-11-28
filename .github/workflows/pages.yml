@@ -40,8 +40,9 @@ jobs:
       - run: cargo clippy --manifest-path native/Cargo.toml --all-targets
       - run: cargo test --manifest-path native/Cargo.toml
       - run: python -m pip install -e '.[corpus]'
-      - run: python scripts/stream_av2.py --limit-scenarios 3 --tracks av --output data/av2-pilot
-      - run: python scripts/build_native_corpus.py --model models/interaction_tc_exemplars.json --output web/public/corpus
+      - run: python scripts/stream_av2.py --limit-scenarios 100 --tracks vehicles --output data/av2-preview
+      - run: python scripts/fit_av2_exemplars.py data/av2-preview data/av2-model --clusters 16 --passes 2
+      - run: cargo run --release --manifest-path native/Cargo.toml -- --pack data/av2-preview data/av2-model/model.json web/public/corpus
       - run: ./scripts/check.sh
         env:
           VITE_CORPUS_BASE_URL: ${{ vars.VITE_CORPUS_BASE_URL }}
