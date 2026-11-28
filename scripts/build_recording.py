@@ -2,6 +2,7 @@
 
 import argparse
 import colorsys
+import gzip
 import hashlib
 import json
 import sys
@@ -21,11 +22,71 @@ from trajectory_manifold.viewer import _log_recording
 MIN_SPEED_MPS = 1.0
 
 
+def cohort_masks(sample):
+    lateral = sample[:, -1, 1]
+    return {
+        "all": np.ones(len(sample), dtype=bool),
+        "center": np.abs(lateral) <= 3,
+        "positive": lateral > 3,
+        "negative": lateral < -3,
+    }
+
+
+def build_focused_recordings(output_dir, sample, cluster_ids, palette):
+    """Pack complete RRD streams for the subsets the web viewer can display."""
+    index = {}
+    spans = {}
+    with gzip.GzipFile(output_dir / "focused-recordings.bin", mode="wb", mtime=0) as output:
+
+        def write(key, rows):
+            if rows not in spans:
+                # Rerun instance IDs follow the order of the browser's filtered indices.
+                indices = list(rows)
+                with rr.RecordingStream("ego_trajectory_focus") as recording:
+                    stream = rr.binary_stream(recording=recording)
+                    _log_recording(
+                        rr,
+                        rrb,
+                        sample[indices],
+                        sample_rate=10,
+                        live=False,
+                        cluster_ids=cluster_ids[indices],
+                        palette=palette,
+                        send_blueprint=False,
+                    )
+                    data = stream.read()
+                spans[rows] = [output.tell(), len(data)]
+                output.write(data)
+            index[key] = spans[rows]
+
+        for i in range(len(sample)):
+            write(f"path-{i}", (i,))
+        for cohort, mask in cohort_masks(sample).items():
+            for cluster in np.unique(cluster_ids[mask]):
+                rows = tuple(np.flatnonzero(mask & (cluster_ids == cluster)))
+                write(f"{cohort}-exemplar-{cluster}", rows)
+
+    (output_dir / "focused-recordings.json").write_text(
+        json.dumps(index, separators=(",", ":")) + "\n", encoding="utf-8"
+    )
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--cohort", choices=("all", "center", "positive", "negative"))
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--cohort", choices=("all", "center", "positive", "negative"))
+    mode.add_argument("--focused-only", action="store_true", help="reuse the published web sample")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
+    output_dir = root / "data"
+    if args.focused_only:
+        sample = np.fromfile(output_dir / "trajectories.bin", dtype="<i2").reshape(-1, 50, 2) / 100
+        cluster_ids = np.fromfile(output_dir / "clusters.bin", dtype="u1")
+        info = json.loads((output_dir / "clusters.json").read_text(encoding="utf-8"))
+        palette = [list(bytes.fromhex(color.removeprefix("#"))) for color in info["palette"]]
+        build_focused_recordings(output_dir, sample, cluster_ids, palette)
+        return
+
     trajectories, metadata = load_trajectories(
         root=root / "data",
         num_trajectories=5000,
@@ -68,14 +129,11 @@ def main():
         )
         for i in range(len(model.trajectories))
     ]
-    lateral = sample[:, -1, 1]
-    masks = {
-        "all": np.ones(len(sample), dtype=bool),
-        "center": np.abs(lateral) <= 3,
-        "positive": lateral > 3,
-        "negative": lateral < -3,
-    }
-    output_dir = root / "data"
+    # Use the same cohort boundary as the browser, which reads centimetre positions.
+    scaled = np.rint(sample * 100)
+    if np.max(np.abs(scaled)) > 32767:
+        raise ValueError("Trajectory exceeds Int16 centimetre range")
+    masks = cohort_masks(scaled / 100)
     output_dir.mkdir(parents=True, exist_ok=True)
     _, actions, valid = infer_kinematics(sample, sample_rate=10, min_speed=MIN_SPEED_MPS)
     (output_dir / "actions.bin").write_bytes(actions.astype("<f4").tobytes())
@@ -133,11 +191,9 @@ def main():
         + "\n"
     )
     # Int16 centimetres: 100 kB for 500 × 50 × 2, for the canvas fallback.
-    scaled = np.rint(sample * 100)
-    if np.max(np.abs(scaled)) > 32767:
-        raise ValueError("Trajectory exceeds Int16 centimetre range")
     (output_dir / "trajectories.bin").write_bytes(scaled.astype("<i2").tobytes())
-    for cohort in ([args.cohort] if args.cohort else masks):
+    build_focused_recordings(output_dir, scaled / 100, cluster_ids, palette)
+    for cohort in [args.cohort] if args.cohort else masks:
         subset = sample[masks[cohort]]
         destination = output_dir / f"{cohort}.rrd"
         rr.init(f"ego_trajectory_{cohort}")

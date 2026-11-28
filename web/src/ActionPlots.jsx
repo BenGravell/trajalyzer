@@ -51,8 +51,8 @@ function Plot({ trajectories, selected, time, onSeek, config, frames }) {
     ctx.beginPath();
     ctx.rect(left, top, right - left, bottom - top);
     ctx.clip();
-    ctx.globalAlpha = 0.18;
-    ctx.lineWidth = 0.9;
+    ctx.globalAlpha = 0.45;
+    ctx.lineWidth = 1.1;
     for (const trace of trajectories) {
       if (trace.id === selected?.id) continue;
       ctx.strokeStyle = trace.color;
@@ -143,15 +143,22 @@ function Plot({ trajectories, selected, time, onSeek, config, frames }) {
   );
 }
 
-export default function ActionPlots({ trajectories = [], selectedId, time, onSeek, frames = 50 }) {
+export default function ActionPlots({
+  trajectories = [],
+  selectedId,
+  selectedLabel,
+  time,
+  onSeek,
+  frames = 50,
+}) {
   const selected = trajectories.find((trace) => trace.id === selectedId);
   const valid = selected?.values.filter((row) => Number.isFinite(row[1])).length ?? 0;
   return (
     <section className="diagnostics" aria-label="Inferred action diagnostics">
       <header className="diagnostics-heading">
         <strong>
-          {trajectories.length} visible action traces · selected path{' '}
-          {selectedId == null ? '—' : selectedId + 1}
+          {trajectories.length} visible action traces
+          {selected && ` · selected path ${selectedLabel ?? selectedId}`}
         </strong>
         <small>
           {valid}/{frames} selected valid · local cubic derivative, 0.7 s window · moving paths ≥1

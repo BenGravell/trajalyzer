@@ -36,17 +36,26 @@ def _colors(trajectories: np.ndarray) -> np.ndarray:
 
 
 def _log_recording(
-    rr, rrb, batch: np.ndarray, sample_rate: int, live: bool, cluster_ids=None, palette=None
+    rr,
+    rrb,
+    batch: np.ndarray,
+    sample_rate: int,
+    live: bool,
+    cluster_ids=None,
+    palette=None,
+    *,
+    send_blueprint: bool = True,
 ) -> None:
     count, frames, _ = batch.shape
     colors = (
         _colors(batch) if cluster_ids is None else np.asarray(palette, dtype=np.uint8)[cluster_ids]
     )
-    rr.send_blueprint(
-        rrb.Blueprint(
-            rrb.Spatial2DView(origin="/trajectories", name="Ego trajectories (metres)"),
+    if send_blueprint:
+        rr.send_blueprint(
+            rrb.Blueprint(
+                rrb.Spatial2DView(origin="/trajectories", name="Ego trajectories (metres)"),
+            )
         )
-    )
     # One batched static entity keeps thousands of paths cheap to draw.
     rr.log(
         "trajectories/paths",

@@ -4,6 +4,7 @@ import { Slider } from '@astryxdesign/core/Slider';
 import { Selector } from '@astryxdesign/core/Selector';
 import FallbackViewer from './FallbackViewer.jsx';
 import ActionPlots from './ActionPlots.jsx';
+import TrajectoryVisibility from './TrajectoryVisibility.jsx';
 
 const base = new URL(
   import.meta.env.VITE_CORPUS_BASE_URL || `${import.meta.env.BASE_URL}corpus/`,
@@ -17,11 +18,6 @@ const groups = [
 ];
 const MAX_SHARDS = 6;
 const MAX_VISIBLE = 768;
-const visibilityOptions = [
-  { value: 'all', label: 'All loaded paths' },
-  { value: 'exemplar', label: 'Selected exemplar group' },
-  { value: 'selected', label: 'Selected path only' },
-];
 
 function selectShards(manifest, cohort, cluster, page) {
   const eligible = manifest.shards.filter(
@@ -315,13 +311,7 @@ export default function CorpusExplorer({ onDiagnostics }) {
               }}
               presentation="adaptive"
             />
-            <Selector
-              label="Show trajectories"
-              value={visibility}
-              options={visibilityOptions}
-              onChange={(value) => setVisibility(value || 'all')}
-              presentation="adaptive"
-            />
+            <TrajectoryVisibility value={visibility} onChange={setVisibility} />
             <Slider
               label="Corpus page"
               value={page + 1}
@@ -398,7 +388,7 @@ export default function CorpusExplorer({ onDiagnostics }) {
             selectedIndex={visibleRows.indexOf(chosen)}
             labels={labels}
             palette={palette}
-            exemplarPath={model?.paths[chosen?.cluster]}
+            exemplarPath={visibility === 'selected' ? undefined : model?.paths[chosen?.cluster]}
             onSelect={(index) => setSelected(rows.indexOf(visibleRows[index]))}
           />
           <ActionPlots

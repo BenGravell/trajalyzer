@@ -6,6 +6,7 @@ import { Selector } from '@astryxdesign/core/Selector';
 import { Badge } from '@astryxdesign/core/Badge';
 import FallbackViewer from './FallbackViewer.jsx';
 import ActionPlots from './ActionPlots.jsx';
+import TrajectoryVisibility from './TrajectoryVisibility.jsx';
 
 const cohorts = [
   { value: 'all', label: 'All sampled paths', detail: 'The 500-window display sample' },
@@ -13,12 +14,43 @@ const cohorts = [
   { value: 'positive', label: 'Positive lateral', detail: 'Final lateral displacement above +3 m' },
   { value: 'negative', label: 'Negative lateral', detail: 'Final lateral displacement below −3 m' },
 ];
-const visibilityOptions = [
-  { value: 'all', label: 'All paths in group' },
-  { value: 'exemplar', label: 'Selected exemplar group' },
-  { value: 'selected', label: 'Selected path only' },
-];
-const url = (name) => new URL(`${import.meta.env.BASE_URL}${name}.rrd`, document.baseURI).href;
+const asset = (name) => new URL(`${import.meta.env.BASE_URL}${name}`, document.baseURI).href;
+const frameNanoseconds = 100_000_000;
+
+let focusedRecordings;
+async function loadFocusedRecording(key) {
+  focusedRecordings ??= Promise.all(
+    ['focused-recordings.json', 'focused-recordings.bin'].map(async (name) => {
+      const response = await fetch(asset(name));
+      if (!response.ok) throw Error('Focused recording unavailable');
+      if (name.endsWith('.json')) return response.json();
+      const decoded = response.body.pipeThrough(new DecompressionStream('gzip'));
+      return new Response(decoded).arrayBuffer();
+    }),
+  ).catch((error) => {
+    focusedRecordings = undefined;
+    throw error;
+  });
+  const [index, buffer] = await focusedRecordings;
+  const [offset, length] = index[key] ?? [];
+  if (
+    !Number.isInteger(offset) ||
+    !Number.isInteger(length) ||
+    length <= 0 ||
+    offset < 0 ||
+    offset + length > buffer.byteLength
+  )
+    throw Error('Invalid focused recording');
+  return new Uint8Array(buffer, offset, length);
+}
+
+function inCohort(path, cohort) {
+  const lateral = path[49][1];
+  if (cohort === 'center') return Math.abs(lateral) <= 3;
+  if (cohort === 'positive') return lateral > 3;
+  if (cohort === 'negative') return lateral < -3;
+  return true;
+}
 const hasWebGL2 = () => {
   try {
     return !!document.createElement('canvas').getContext('webgl2');
@@ -41,19 +73,15 @@ function DiagnosticApp({ onCorpus }) {
     [time, setTime] = useState(0);
   const [selection, setSelection] = useState('Tap a path or position to inspect it.');
   const [focus, setFocus] = useState(false);
-  const [mode, setMode] = useState(hasWebGL2() ? 'rerun' : 'canvas'),
+  const [mode, setMode] = useState(() => (hasWebGL2() ? 'rerun' : 'canvas')),
     [paths, setPaths] = useState(null);
   const [actions, setActions] = useState(null),
     [selectedSample, setSelectedSample] = useState(2);
   const [clusters, setClusters] = useState(null);
-  const showRerun = mode === 'rerun' && visibility === 'all';
+  const showRerun = mode === 'rerun';
 
   useEffect(() => {
-    timeRef.current = time;
-  }, [time]);
-
-  useEffect(() => {
-    fetch(url('cohorts').replace('.rrd', '.json'))
+    fetch(asset('cohorts.json'))
       .then((r) => {
         if (!r.ok) throw Error('Summary unavailable');
         return r.json();
@@ -64,7 +92,7 @@ function DiagnosticApp({ onCorpus }) {
 
   useEffect(() => {
     if (paths) return;
-    fetch(new URL(`${import.meta.env.BASE_URL}trajectories.bin`, document.baseURI))
+    fetch(asset('trajectories.bin'))
       .then((r) => {
         if (!r.ok) throw Error('Trajectory data unavailable');
         return r.arrayBuffer();
@@ -86,7 +114,7 @@ function DiagnosticApp({ onCorpus }) {
   }, [paths]);
 
   useEffect(() => {
-    fetch(new URL(`${import.meta.env.BASE_URL}actions.bin`, document.baseURI))
+    fetch(asset('actions.bin'))
       .then((r) => {
         if (!r.ok) throw Error('Inferred actions unavailable');
         return r.arrayBuffer();
@@ -107,7 +135,6 @@ function DiagnosticApp({ onCorpus }) {
   }, []);
 
   useEffect(() => {
-    const asset = (name) => new URL(`${import.meta.env.BASE_URL}${name}`, document.baseURI);
     Promise.all(
       ['clusters.json', 'clusters.bin', 'distances.bin', 'heldout.bin', 'exemplars.bin'].map(
         (name) =>
@@ -136,9 +163,29 @@ function DiagnosticApp({ onCorpus }) {
       .catch((e) => setError(e.message));
   }, []);
 
-  useEffect(() => {
-    if (!showRerun) setReady(!!paths);
-  }, [showRerun, paths, cohort]);
+  const cohortIndices = useMemo(
+    () => paths?.flatMap((path, i) => (inCohort(path, cohort) ? [i] : [])),
+    [paths, cohort],
+  );
+  const sampleIndex = cohortIndices?.includes(selectedSample) ? selectedSample : cohortIndices?.[0];
+  const clusterId = clusters?.ids[sampleIndex];
+  const focusedPath = visibility === 'selected' ? sampleIndex : undefined;
+  const focusedExemplar = visibility === 'exemplar' ? clusterId : undefined;
+  const visibleIndices = useMemo(() => {
+    if (visibility === 'all') return cohortIndices;
+    if (visibility === 'selected') return focusedPath == null ? [] : [focusedPath];
+    return cohortIndices?.filter(
+      (i) => focusedExemplar != null && clusters.ids[i] === focusedExemplar,
+    );
+  }, [cohortIndices, visibility, focusedPath, focusedExemplar, clusters]);
+  const recordingKey =
+    focusedPath != null
+      ? `path-${focusedPath}`
+      : focusedExemplar != null
+        ? `${cohort}-exemplar-${focusedExemplar}`
+        : null;
+  const canShowRerun = showRerun && !!visibleIndices?.length;
+  const playbackReady = showRerun ? ready && canShowRerun : !!visibleIndices?.length;
 
   useEffect(() => {
     if (showRerun || !playing) return;
@@ -157,27 +204,13 @@ function DiagnosticApp({ onCorpus }) {
   }, [showRerun, playing]);
 
   useEffect(() => {
-    if (!showRerun || !paths) return;
+    if (!canShowRerun) return;
     let disposed = false;
     const instance = new WebViewer();
     viewer.current = instance;
     recordingId.current = null;
     setReady(false);
-    setError('');
     setPlaying(false);
-    setSelection('Tap a path or position to inspect it.');
-    const recordingIndices = paths
-      ?.map((path, i) => ({ path, i }))
-      .filter(
-        ({ path }) =>
-          cohort === 'all' ||
-          (cohort === 'center'
-            ? Math.abs(path[49][1]) <= 3
-            : cohort === 'positive'
-              ? path[49][1] > 3
-              : path[49][1] < -3),
-      )
-      .map(({ i }) => i);
     const remove = [
       instance.on('recording_open', (e) => {
         if (disposed) return;
@@ -186,13 +219,16 @@ function DiagnosticApp({ onCorpus }) {
         instance.set_current_time(
           e.recording_id,
           'elapsed',
-          Math.round(timeRef.current * 100_000_000),
+          Math.round(timeRef.current * frameNanoseconds),
         );
+        instance.set_playing(e.recording_id, false);
         instance.override_panel_state('blueprint', 'hidden');
         setReady(true);
       }),
       instance.on('time_update', (e) => {
-        if (!disposed) setTime(Math.min(49, Math.max(0, e.time / 100_000_000)));
+        if (disposed || instance.get_active_timeline(e.recording_id) !== 'elapsed') return;
+        timeRef.current = Math.min(49, Math.max(0, e.time / frameNanoseconds));
+        setTime(timeRef.current);
       }),
       instance.on('play', () => {
         if (!disposed) setPlaying(true);
@@ -205,14 +241,27 @@ function DiagnosticApp({ onCorpus }) {
         const item = e.items.find(
           (x) =>
             x.type === 'entity' &&
-            Number.isInteger(x.instance_id) &&
-            x.entity_path?.includes('trajectories/'),
+            /^\/?trajectories\/(paths|vehicles)$/.test(x.entity_path) &&
+            (Number.isInteger(x.instance_id) || visibleIndices.length === 1),
         );
-        if (item && recordingIndices?.[item.instance_id] != null)
-          setSelectedSample(recordingIndices[item.instance_id]);
+        if (item && visibleIndices[item.instance_id ?? 0] != null)
+          setSelectedSample(visibleIndices[item.instance_id ?? 0]);
       }),
     ];
-    instance.start(url(cohort), host.current, null).catch(() => {
+    const start = async () => {
+      const data = recordingKey ? await loadFocusedRecording(recordingKey) : null;
+      if (disposed) return;
+      await instance.start(data ? null : asset(`${cohort}.rrd`), host.current, {
+        width: '100%',
+        height: '100%',
+      });
+      if (data && !disposed) {
+        const channel = instance.open_channel();
+        channel.send_rrd(data);
+        channel.close();
+      }
+    };
+    start().catch(() => {
       if (!disposed) {
         instance.stop();
         setMode('canvas');
@@ -225,58 +274,33 @@ function DiagnosticApp({ onCorpus }) {
       recordingId.current = null;
       if (viewer.current === instance) viewer.current = null;
     };
-  }, [cohort, showRerun, paths]);
+  }, [canShowRerun, cohort, recordingKey, visibleIndices]);
 
   const seek = (value) => {
+    timeRef.current = value;
     setTime(value);
     if (recordingId.current)
       viewer.current?.set_current_time(
         recordingId.current,
         'elapsed',
-        Math.round(value * 100_000_000),
+        Math.round(value * frameNanoseconds),
       );
   };
   const toggle = () => {
     if (showRerun) {
       if (!recordingId.current) return;
       viewer.current?.set_playing(recordingId.current, !playing);
-    } else if (time >= 49) setTime(0);
+    } else if (time >= 49) seek(0);
     setPlaying(!playing);
   };
   const active = cohorts.find((x) => x.value === cohort);
-  const cohortIndices = useMemo(
-    () =>
-      paths
-        ?.map((path, i) => ({ path, i }))
-        .filter(
-          ({ path }) =>
-            cohort === 'all' ||
-            (cohort === 'center'
-              ? Math.abs(path[49][1]) <= 3
-              : cohort === 'positive'
-                ? path[49][1] > 3
-                : path[49][1] < -3),
-        )
-        .map(({ i }) => i),
-    [paths, cohort],
-  );
-  const selectedCluster = clusters?.ids[selectedSample];
-  const visibleIndices = useMemo(
-    () =>
-      cohortIndices?.filter(
-        (i) =>
-          visibility === 'all' ||
-          (visibility === 'selected' ? i === selectedSample : clusters?.ids[i] === selectedCluster),
-      ),
-    [cohortIndices, visibility, selectedSample, selectedCluster, clusters],
-  );
   const visiblePaths = useMemo(() => visibleIndices?.map((i) => paths[i]), [visibleIndices, paths]);
   const visibleLabels = useMemo(
     () => visibleIndices?.map((i) => clusters?.ids[i]),
     [visibleIndices, clusters],
   );
-  const localIndex = Math.max(0, visibleIndices?.indexOf(selectedSample) ?? 0);
-  const sampleIndex = selectedSample;
+  const localIndex = visibleIndices?.indexOf(sampleIndex) ?? -1;
+  const cohortIndex = cohortIndices?.indexOf(sampleIndex) ?? -1;
   const traces = useMemo(
     () =>
       visibleIndices?.flatMap((i) =>
@@ -292,20 +316,11 @@ function DiagnosticApp({ onCorpus }) {
       ) ?? [],
     [visibleIndices, actions, clusters],
   );
-  const clusterId = clusters?.ids[sampleIndex];
   const changeCohort = (value) => {
     if (value) {
       setCohort(value);
-      const first = paths?.findIndex(
-        (path) =>
-          value === 'all' ||
-          (value === 'center'
-            ? Math.abs(path[49][1]) <= 3
-            : value === 'positive'
-              ? path[49][1] > 3
-              : path[49][1] < -3),
-      );
-      if (first >= 0) setSelectedSample(first);
+      if (paths?.[sampleIndex] && !inCohort(paths[sampleIndex], value))
+        setSelectedSample(paths.findIndex((path) => inCohort(path, value)));
       setSelection('Choose a path or tap one in the view.');
     }
   };
@@ -318,7 +333,7 @@ function DiagnosticApp({ onCorpus }) {
           <p className="subhead">Real vehicle motion in a shared ego-relative frame</p>
         </section>
         <section className="header-actions">
-          <Badge label={ready ? 'Recording ready' : 'Loading recording'} />
+          <Badge label={playbackReady ? 'Recording ready' : 'Loading recording'} />
           <Button label="Explore corpus" onClick={onCorpus} />
           <Button label={focus ? 'Show controls' : 'Focus view'} onClick={() => setFocus(!focus)} />
         </section>
@@ -353,29 +368,26 @@ function DiagnosticApp({ onCorpus }) {
               onChange={changeCohort}
               presentation="adaptive"
             />
-            <Selector
-              label="Show trajectories"
+            <TrajectoryVisibility
               value={visibility}
-              options={visibilityOptions}
               onChange={(value) => {
-                setVisibility(value || 'all');
+                setVisibility(value);
                 setPlaying(false);
               }}
-              presentation="adaptive"
             />
             <p className="supporting">
               {active.detail}. This threshold is descriptive, not a maneuver label.
             </p>
             <Slider
               label="Inspect path"
-              value={localIndex + 1}
+              value={Math.max(1, cohortIndex + 1)}
               min={1}
-              max={visibleIndices?.length ?? 1}
+              max={Math.max(1, cohortIndices?.length ?? 0)}
               step={1}
-              onChange={(value) => setSelectedSample(visibleIndices[value - 1])}
-              formatValue={(value) => `${value} / ${visibleIndices?.length ?? '—'}`}
+              onChange={(value) => setSelectedSample(cohortIndices[value - 1])}
+              formatValue={(value) => `${value} / ${cohortIndices?.length ?? '—'}`}
               valueDisplay="text"
-              isDisabled={!visibleIndices?.length}
+              isDisabled={!cohortIndices?.length}
             />
           </section>
           <section className="control-group">
@@ -383,7 +395,7 @@ function DiagnosticApp({ onCorpus }) {
             <Button
               label={playing ? 'Pause trajectories' : 'Play trajectories'}
               variant="primary"
-              isDisabled={!ready}
+              isDisabled={!playbackReady}
               onClick={toggle}
             />
             <Slider
@@ -395,7 +407,7 @@ function DiagnosticApp({ onCorpus }) {
               onChange={seek}
               formatValue={(value) => `${(value / 10).toFixed(1)} s`}
               valueDisplay="text"
-              isDisabled={!ready}
+              isDisabled={!playbackReady}
             />
             <p className="supporting">
               Use this control{showRerun ? ' or Rerun’s timeline' : ''} to scrub through 50
@@ -405,7 +417,7 @@ function DiagnosticApp({ onCorpus }) {
           <section className="control-group inspector">
             <p className="eyebrow">INSPECTOR</p>
             <p>
-              Sample path {sampleIndex + 1} · {(time / 10).toFixed(1)} s
+              Sample path {sampleIndex == null ? '—' : sampleIndex + 1} · {(time / 10).toFixed(1)} s
             </p>
             <p
               className="cluster-tag"
@@ -414,7 +426,7 @@ function DiagnosticApp({ onCorpus }) {
               Exemplar {clusterId == null ? '—' : clusterId + 1} / {clusters?.info.count ?? '—'}
             </p>
             <p className="supporting">
-              {clusters
+              {clusterId != null
                 ? `${clusters.heldout[sampleIndex] ? 'Held-out track · test assignment' : 'Training track · assigned to exemplar'} · feature distance ${clusters.distances[sampleIndex].toFixed(2)}`
                 : 'Loading exemplar assignment…'}
             </p>
@@ -422,7 +434,7 @@ function DiagnosticApp({ onCorpus }) {
             <p className="supporting">
               {showRerun
                 ? 'Select a path in Rerun or use the path slider.'
-                : 'Drag and zoom the canvas. Tap a point or use the path slider. Focused visibility uses the canvas view.'}
+                : 'Drag and zoom the canvas. Tap a point or use the path slider.'}
             </p>
           </section>
         </aside>
@@ -436,18 +448,24 @@ function DiagnosticApp({ onCorpus }) {
           ) : (
             <FallbackViewer
               paths={visiblePaths}
-              time={time}
+              time={Math.round(time)}
               selectedIndex={localIndex}
               labels={visibleLabels}
               palette={clusters?.info.palette}
-              exemplarPath={clusters?.exemplars[clusterId]}
+              exemplarPath={visibility === 'selected' ? undefined : clusters?.exemplars[clusterId]}
               onSelect={(index, detail) => {
                 setSelectedSample(visibleIndices[index]);
                 setSelection(detail);
               }}
             />
           )}
-          <ActionPlots trajectories={traces} selectedId={sampleIndex} time={time} onSeek={seek} />
+          <ActionPlots
+            trajectories={traces}
+            selectedId={sampleIndex}
+            selectedLabel={sampleIndex == null ? undefined : sampleIndex + 1}
+            time={time}
+            onSeek={seek}
+          />
           {error && (
             <p className="error" role="alert">
               {error}
