@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fs::{self, File};
-use std::io::{BufWriter, Write};
+use std::io::{self, BufWriter, Write};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
@@ -17,6 +17,17 @@ const SHARD_SIZE: usize = 128;
 
 #[derive(Deserialize, Serialize)]
 struct Row {
+    track_id: String,
+    timestamp_ms: i64,
+    x: f64,
+    y: f64,
+    vx: f64,
+    vy: f64,
+    psi_rad: f64,
+}
+#[derive(Deserialize)]
+struct StreamRow {
+    scenario_id: String,
     track_id: String,
     timestamp_ms: i64,
     x: f64,
@@ -218,6 +229,9 @@ fn process_partition(path: &Path, source: &Path, model: &Model, builder: &mut Bu
         let row = row?;
         tracks.entry(row.track_id.clone()).or_default().push(row);
     }
+    process_tracks(tracks, source, model, builder, weights)
+}
+fn process_tracks(tracks: HashMap<String, Vec<Row>>, source: &Path, model: &Model, builder: &mut Builder, weights: &[(usize, [f64; 7], [f64; 7])]) -> Result<()> {
     let mut tracks: Vec<_> = tracks.into_iter().collect();
     tracks.sort_by(|a, b| a.0.cmp(&b.0));
     for (track, mut rows) in tracks {
@@ -234,6 +248,31 @@ fn process_partition(path: &Path, source: &Path, model: &Model, builder: &mut Bu
                 segment = i;
             }
         }
+    }
+    Ok(())
+}
+fn process_stream(model: &Model, builder: &mut Builder, weights: &[(usize, [f64; 7], [f64; 7])]) -> Result<()> {
+    // The Arrow adapter emits complete scenarios consecutively. Retain only
+    // one scenario's tracks, regardless of total corpus size.
+    let stdin = io::stdin();
+    let mut tracks: HashMap<String, Vec<Row>> = HashMap::new();
+    let mut current: Option<String> = None;
+    for item in csv::Reader::from_reader(stdin.lock()).deserialize::<StreamRow>() {
+        let item = item?;
+        if current.as_deref() != Some(item.scenario_id.as_str()) {
+            if let Some(id) = current.take() {
+                process_tracks(std::mem::take(&mut tracks), Path::new(&id), model, builder, weights)?;
+            }
+            current = Some(item.scenario_id.clone());
+        }
+        tracks.entry(item.track_id.clone()).or_default().push(Row {
+            track_id: item.track_id,
+            timestamp_ms: item.timestamp_ms,
+            x: item.x, y: item.y, vx: item.vx, vy: item.vy, psi_rad: item.psi_rad,
+        });
+    }
+    if let Some(id) = current {
+        process_tracks(tracks, Path::new(&id), model, builder, weights)?;
     }
     Ok(())
 }
@@ -271,16 +310,20 @@ fn collect_csv(input: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
 }
 fn run() -> Result<()> {
     let args: Vec<_> = std::env::args().collect();
-    if args.len() != 4 { return Err("Usage: trajalyzer-corpus INPUT_CSV_OR_DIRECTORY EXEMPLARS_JSON OUTPUT_DIRECTORY".into()); }
+    if args.len() != 4 { return Err("Usage: trajalyzer-corpus INPUT_CSV_OR_DIRECTORY|--stream EXEMPLARS_JSON OUTPUT_DIRECTORY".into()); }
     let model: Model = serde_json::from_reader(File::open(&args[2])?)?;
     if model.features.is_empty() || model.features.iter().any(|f| f.len() != 125) { return Err("Expected nonempty 125-dimensional exemplar features".into()); }
     let mut builder = Builder::new(PathBuf::from(&args[3]))?;
     let weights = stencils();
-    let mut files = Vec::new();
-    collect_csv(Path::new(&args[1]), &mut files)?;
-    files.sort();
-    if files.is_empty() { return Err("No CSV files found".into()); }
-    for file in files { process_csv(&file, &model, &mut builder, &weights)?; }
+    if args[1] == "--stream" {
+        process_stream(&model, &mut builder, &weights)?;
+    } else {
+        let mut files = Vec::new();
+        collect_csv(Path::new(&args[1]), &mut files)?;
+        files.sort();
+        if files.is_empty() { return Err("No CSV files found".into()); }
+        for file in files { process_csv(&file, &model, &mut builder, &weights)?; }
+    }
     builder.finish()
 }
 fn main() { if let Err(error) = run() { eprintln!("{error}"); std::process::exit(1); } }

@@ -144,3 +144,10 @@ then contains the application and small diagnostic sample, while the CDN serves
 immutable corpus shards. Changing the manifest should be deployed atomically
 with its shards. The currently bundled source has only one intersection and
 must not be interpreted as a million independent behaviors.
+
+## Million-window source
+
+[Argoverse 2 acquisition and provenance](docs/data_sources.md) documents the
+public Parquet source, a bounded S3-to-Rust streaming command, preliminary
+motion-filter yield, licensing, and alternative datasets. The small AV2 pilot
+runs in CI without changing the deployed INTERACTION demonstration.
